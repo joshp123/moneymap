@@ -331,8 +331,12 @@ const page = `<!doctype html>
             color: white;
         }
 
-        #secondarycounter, #stopcounter {
+        #secondarycounter, #stopcounter, #billionairecounter, #propertymethod {
             text-align: center;
+        }
+
+        #propertymethod {
+            font-size: smaller;
         }
 
         @media (max-width: 400px) {
@@ -399,6 +403,8 @@ const page = `<!doctype html>
 <p style="text-align:center" id="maincounter" aria-live="polite">--</p>
 <p id="stopcounter" hidden></p>
 <p id="secondarycounter"></p>
+<p id="billionairecounter" hidden></p>
+<p id="propertymethod" hidden>Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land is shared out by population, local density and GDP, and buildings by population, GDP and built-up volume.</p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
 <h2>Give me the data!</h2>
 <div id="table"></div>
@@ -411,7 +417,9 @@ const page = `<!doctype html>
 <p>US workplace jobs: US Census Bureau, <a href="https://lehd.ces.census.gov/data/lodes/LODES8/">LEHD Origin-Destination Employment Statistics</a> (public domain).</p>
 <p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
 <p>Land and building value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a> and <a href="https://eng.stat.gov.tw/News_Content.aspx?n=2336&amp;s=235628">Taiwan DGBAS national accounts</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
-<p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
+<p>Billionaire net worths: <a href="https://www.forbes.com/real-time-billionaires/">Forbes</a>, 1 October 2026.</p>
+<p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles from the <a href="https://operations.osmfoundation.org/policies/tiles/">OpenStreetMap Foundation</a>.</p>
+<p>Boundaries and statistics notices: &copy; EuroGeographics for the administrative boundaries. Source: Eurostat; moneymap derives regional shares from these figures, and Eurostat is not responsible for the results. Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>. Contains OS data &copy; Crown copyright and database right 2026. Copyright Scottish Government, contains Ordnance Survey data &copy; Crown copyright and database right 2026. Source: NISRA; contains Ordnance Survey of Northern Ireland information licensed under the Open Government Licence v3.0. Full citations are in <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
 var map = L.map('map').setView([20, 0], 2);
@@ -434,6 +442,16 @@ function money(value) {
   if (value >= 1e6) return '$' + (value / 1e6).toFixed(1) + ' million';
   return '$' + numberFormat.format(value);
 }
+// Forbes real-time net worths, 1 October 2026.
+var BILLIONAIRE_NET_WORTHS = [['Elon Musks', 936e9], ['Jeff Bezoses', 370e9], ['Mark Zuckerbergs', 251e9]];
+function inBillionaires(value) {
+  var amounts = BILLIONAIRE_NET_WORTHS.map(function (billionaire) {
+    var ratio = value / billionaire[1];
+    var shown = ratio >= 100 ? numberFormat.format(ratio) : ratio >= 1 ? ratio.toFixed(1) : String(Number(ratio.toPrecision(2)));
+    return shown + ' ' + billionaire[0];
+  });
+  return 'In billionaires: ' + amounts.slice(0, -1).join(', ') + ' or ' + amounts[amounts.length - 1] + '.';
+}
 function perHead(value) {
   return value === null ? '' : '$' + numberFormat.format(value);
 }
@@ -446,7 +464,7 @@ function renderResult() {
   document.getElementById('populationmode').setAttribute('aria-pressed', String(mode === 'population'));
   document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
   document.getElementById('propertymode').setAttribute('aria-pressed', String(isProperty));
-  document.getElementById('resultlabel').textContent = isProperty ? 'Value of land and buildings within circle (2024, US dollars):' : isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
+  document.getElementById('resultlabel').textContent = isProperty ? 'Value of land and buildings within circle (2024, US dollars):' : isGDP ? 'GDP within circle in 2024 (PPP, international dollars):' : 'Population within circle in 2025:';
   document.getElementById('maincounter').textContent = lastResult ? (isProperty ? money(lastResult.land_value + lastResult.building_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
   var secondary = '';
   if (lastResult) {
@@ -454,6 +472,9 @@ function renderResult() {
     else secondary = (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person');
   }
   document.getElementById('secondarycounter').textContent = secondary;
+  document.getElementById('billionairecounter').hidden = !isProperty || !lastResult;
+  document.getElementById('billionairecounter').textContent = isProperty && lastResult ? inBillionaires(lastResult.land_value + lastResult.building_value) : '';
+  document.getElementById('propertymethod').hidden = !isProperty;
   document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
   document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
   renderTable();

@@ -1,20 +1,22 @@
-Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude opus 5.5.
+Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised and rewritten by model claude opus 5.5.
 
 # moneymap
 
-Choose a radius from 3 to 100 km and click the map to see the population, GDP and property value inside the circle, anywhere in the world. Population mode also counts bus, tram, metro and train stops; `mode=gdp` selects GDP and `mode=property` selects land plus buildings. Existing `mode=land` links open property mode. It is live at https://moneymap.jjpcodes.com and extends Tom Forth's [Population around a point](https://www.tomforth.co.uk/circlepopulations/).
+Click anywhere on the map and choose a radius from 3 to 100 km. moneymap tells you how many people live inside the circle, how many bus, tram, metro and train stops it holds, how much GDP is produced there, and roughly what its land and buildings are worth.
 
-[How the numbers are calculated](docs/methodology.md). US county GDP is split by BEA industry and spread by that industry's LODES workplace jobs, weighted by high-pay share. Other countries retain their existing rule.
+It is live at https://moneymap.jjpcodes.com. It extends Tom Forth's [Population around a point](https://www.tomforth.co.uk/circlepopulations/), which counts people and stops, by adding GDP and property value.
 
-Land value excludes buildings and uses 2024 US dollars at market exchange rates. National totals follow OECD and Taiwan DGBAS balance sheets, or the fixed big-city-share model. Within each country, half follows population weighted by nearby density and half follows production GDP.
+The page has three modes: population (with stops), GDP, and property value (land plus buildings). Links choose a mode with `mode=gdp` or `mode=property`; older `mode=land` links open property mode.
 
-Building value uses OECD net dwellings plus non-residential buildings, excluding civil-engineering structures. Countries without these totals use the constant buildings/GDP ratio selected by leave-one-country-out checks. Within each country, buildings follow equal thirds of population, production GDP and GHSL total built volume. Property value is the sum of the unchanged land layer and this building layer, both in 2024 US dollars.
+## How good are the numbers?
 
-The building layer totals $224.779 trillion across 235 countries and territories: 32 OECD reporters and 203 modelled totals. The selected ratio is 1.929647 × GDP, with leave-one-out log RMSE 0.297394. All country conservation and tile read-back checks pass. Buildings have 16,013 tiles (922,348,800 bytes). The spatial rule was selected from four fixed candidates: population won the mean score, but missed 70% of the Manhattan core's official share. Equal thirds scored best across NYC districts and second overall; it still over-allocates that core. Official valuation checks and all candidate circles are recorded in [the methodology](docs/methodology.md).
+Rough. moneymap was built in about a day by Josh directing AI agents, with little human review. Population and stops come straight from open data. GDP, land and building values are estimates: official national and regional totals, spread over a 1 km grid by simple rules. In tests against official figures, 5% to 30% of the value lands in the wrong small area, and some places are much further out, such as Tokyo's centre for land and Manhattan's core for buildings.
+
+[How the numbers are calculated](docs/methodology.md) explains every number, the tests and the known errors, so that anyone can check the work and improve it.
 
 ## How it works
 
-Each data layer is one value per 30 arc-second grid cell, stored as tiles in the Site's R2 bucket. One Worker serves the page and `/api/circle`, which sums the cells whose centres lie inside the circle. Python builds the tiles locally from the source data.
+Each data layer is one value per 30 arc-second grid cell, stored as tiles in cloud object storage (the Site's R2 bucket). One server script, the Worker, serves the page and `/api/circle`, which sums the cells whose centres lie inside the circle. Python builds the tiles locally from the source data.
 
 ```text
 worker/index.js           The website: page, circle API and authenticated tile sync endpoints
@@ -25,7 +27,7 @@ layers/                   Builds each layer's tiles into data/layers/
   building_value.py       National building totals and the compared spatial weights
   gdp/                    GDP layer
     cell_ownership.py     Which regional unit owns each cell
-    building_weight.py    Non-residential building weight q
+    building_weight.py    Non-residential building weight
     allocation.py         How a unit's GDP is spread over its cells
     build.py              Regional totals, allocation, tiles and conservation checks
   land_value/             Land value excluding buildings
@@ -52,21 +54,24 @@ deploy/
   validate-artifact.mjs   Checks the artifact is an ES module exporting default.fetch
   preview.mjs             Runs the real Worker locally, with data/ as the R2 bucket
   sync-tiles.mjs          Makes the Site's tiles match data/layers/
-research/                 Experiments the method came from; the build does not use them
+research/                 Experiments the method came from; the build does not use them, but two checks read their outputs
 docs/                     Method and research notes
 data/                     Inputs and outputs; local only, not in git
 ```
 
 ## Build and check locally
 
-Tools come from `devenv.nix`; run commands from the repository root. Download these inputs first:
+Tools come from `devenv.nix`; run commands from the repository root. Download these inputs first, under the names the code expects. The research notes sometimes use other names for the same files.
 
-- `data/raw/kummu/rast_gdpTot_1990_2024_30arcsec.tif` and Kummu's admin-1 GeoPackage in `data/raw/research-gdp/`.
-- BEA CAGDP2 2024 CSV in `data/raw/research-gdp/cagdp2/`; LODES `S000_JT00`, `S000_JT02` and crosswalk files in `data/raw/lodes/`. `sources.lodes_jobs` builds the industry grid from these pinned releases.
-- `data/raw/ghspop/GHS_POP_E2025_GLOBE_R2023A_4326_30ss_V1_0.zip`.
-- GHSL non-residential volume and surface (`nres_v_30ss.zip`, `nres_s_30ss.zip`) and the official GDP tables and boundaries in `data/raw/research-gdp/`, as listed in [the research](docs/gdp-method-research.md). The loader fetches missing Scotland and Northern Ireland boundaries, GISCO NUTS boundaries and the CBS table.
-- Land inputs in `data/raw/land-value/`: OECD Table 9B, World Bank GDP and big-city population, UN GDP and Taiwan DGBAS national wealth. Download URLs and Taiwan's exchange rate are recorded in `sources.json` there. The four held-out valuation datasets are in `data/experiments/land-value/`, as listed in [the land research](docs/land-value-research.md).
-- Building inputs in `data/raw/building-value/`: OECD Table 9B building stocks, model comparison inputs and Taiwan DGBAS GDP. Download URLs are in `sources.json` there. GHSL total built volume is `data/raw/research-gdp/built_v_30ss.zip`. Victoria, British Columbia and US valuation checks reuse `data/experiments/land-value/`. New NYC DOF market-value totals and district boundaries are in `nyc/`; the Amsterdam CBS residential WOZ grid is in `europe/`, each with its own `sources.json` provenance.
+- Kummu GDP: `data/raw/kummu/rast_gdpTot_1990_2024_30arcsec.tif` and `data/raw/research-gdp/polyg_adm1_gdp_perCapita_1990_2024.gpkg`.
+- GHSL, all 2025, 30 arc-seconds: `data/raw/ghspop/GHS_POP_E2025_GLOBE_R2023A_4326_30ss_V1_0.zip`, and in `data/raw/research-gdp/` the non-residential volume and surface `nres_v_30ss.zip` and `nres_s_30ss.zip`, and the total built volume `built_v_30ss.zip`.
+- US, in `data/raw/research-gdp/`: `cagdp1/CAGDP1__ALL_AREAS_2001_2024.csv`, `cagdp2/CAGDP2__ALL_AREAS_2001_2024.csv`, `county/cb_2024_us_county_500k.shp` and `county_500k.zip`. `sources.lodes_jobs` downloads the LODES `S000_JT00`, `S000_JT02` and crosswalk files into `data/raw/lodes/`, records the releases in `releases.json`, and builds the jobs-by-industry grid from those recorded releases.
+- UK, in `data/raw/research-gdp/`: `ons_small_area_gva_2023.xlsx` and the ONS 2011 LSOA boundaries as `lsoa/p*.geojson`. The loader downloads `scotland_dz2011.zip` and `ni_soa2011.zip` if missing.
+- Netherlands and Europe, in `data/raw/research-gdp/`: `coropplus_2024.geojson` and the Eurostat 2023 NUTS3 GDP as `nuts3_2023.json`, which the loader does not download. It downloads the CBS table (`cbs_gdp2023.json`) and the GISCO boundaries (`nuts3_2024_01m.geojson`) if missing.
+- Land, in `data/raw/land-value/`: `land_all.csv` (OECD Table 9B), `gdp_usd.json`, `gdp_lcu.json` and `wb_EN.URB.MCTY.TL.ZS.json` (World Bank GDP and big-city population), `un-gdp-usd.xlsx` (UN GDP) and `dgbas-table1-2024.xlsx` (Taiwan national wealth). Download URLs and Taiwan's exchange rate are in `sources.json` there.
+- Buildings, in `data/raw/building-value/`: `oecd-buildings.csv` (OECD Table 9B building stocks), `gdp-per-head-ppp.json` (World Bank GDP per head at purchasing power parity, used to compare national models) and `dgbas-gdp-2024.xlsx` (Taiwan GDP). Download URLs are in `sources.json` there.
+- Valuation checks: the held-out land valuations in `data/experiments/land-value/`, as listed in [the land research](docs/land-value-research.md), which the Victoria, British Columbia and US building checks reuse; NYC Department of Finance values and district boundaries in `data/raw/building-value/nyc/` (`market-values-by-district-2024.json`, `community-districts.geojson`); and the Amsterdam CBS grid in `data/raw/building-value/europe/`, downloaded if missing. Each folder has a `sources.json`.
+- The GDP and land checks also read outputs of the research scripts: `data/experiments/places/` from `research/gdp/places_eval.py`, and `data/experiments/land-value/*_scores.json` and `nrw_official_grid.npz` from `research/land-value/`. The build does not need them.
 
 ```sh
 nix shell nixpkgs#duckdb -c duckdb < sources/overture_places.sql
@@ -90,16 +95,6 @@ Builders write `data/layers/<layer>/<tile row>/<tile column>.bin` and reports in
 
 The land and building builds each write a `country_totals.csv` and `conservation.json` under `data/build/<layer>/`, with every country's target, source, data year and any GDP conversion reference. The building report also records the national model's leave-one-out scores.
 
-## Sources
+## Licence and credits
 
-- [Kummu et al. (2025)](https://doi.org/10.1038/s41597-025-04487-x), [13 March 2026 release](https://zenodo.org/records/18429133), CC BY 4.0: band 8, `gdp_2024`, of `rast_gdpTot_1990_2024_30arcsec.tif`, and reported admin-1 polygons. The release specifies 2021 international dollars; the embedded 2017 unit tag is stale.
-- [GHSL](https://human-settlement.emergency.copernicus.eu/): GHS-POP R2023A population, GHS-BUILT-V total and non-residential volume, and GHS-BUILT-S non-residential surface, all R2023A, 2025, WGS84, 30 arc-seconds, CC BY 4.0.
-- BEA [CAGDP1](https://apps.bea.gov/regional/zip/CAGDP1.zip), county GDP 2024, and [CAGDP2](https://apps.bea.gov/regional/zip/CAGDP2.zip), county and state GDP by industry 2024; [US Census](https://www2.census.gov/geo/tiger/GENZ2024/shp/), county boundaries 2024. US government data.
-- [US Census Bureau, LEHD Origin-Destination Employment Statistics (LODES8)](https://lehd.ces.census.gov/data/lodes/LODES8/), workplace jobs and block internal points, public domain.
-- Land and buildings: [OECD Table 9B](https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&df[id]=DSD_NASEC10@DF_TABLE9B), [Taiwan DGBAS national wealth](https://eng.stat.gov.tw/cl.aspx?n=2411) and [national accounts](https://eng.stat.gov.tw/News_Content.aspx?n=2336&s=235628), [World Bank GDP](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD) and [big-city population](https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS) (CC BY 4.0), [UN national accounts](https://unstats.un.org/unsd/snaama/) and [Taiwan Central Bank exchange rates](https://www.cbc.gov.tw/en/).
-- [ONS small-area GVA 2023](https://www.ons.gov.uk/economy/grossvalueaddedgva/datasets/uksmallareagvaestimates); ONS 2011 LSOA boundaries, [Scottish data zones](https://maps.gov.scot/ATOM/shapefiles/SG_DataZoneBdry_2011.zip), [Northern Ireland SOAs](https://www.nisra.gov.uk/files/nisra/publications/SOA2011_Esri_Shapefile_0.zip). Open Government Licence.
-- [Eurostat regional GDP](https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10r_3gdp?unit=MIO_EUR&time=2023) and [GISCO NUTS 2024 boundaries](https://gisco-services.ec.europa.eu/distribution/v2/nuts/), Eurostat reuse terms.
-- [CBS 85924NED](https://opendata.cbs.nl/ODataApi/OData/85924NED), GDP 2023; [PDOK COROP-plus 2024 boundaries](https://api.pdok.nl/cbs/gebiedsindelingen/ogc/v1), CC BY 4.0.
-- Workplace places: [Overture Maps Foundation](https://overturemaps.org/), release 2026-09-23.1, [CDLA Permissive 2.0](https://cdla.dev/permissive-2-0/) and [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0).
-- Transit stops: © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), via [Overture Maps Foundation](https://overturemaps.org/), release 2026-09-23.1, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/). Extraction rules are in `sources/overture_stops.sql` and [the stop research](docs/stops-research.md).
-- Page adapted from [Tom Forth's Population around a point](https://www.tomforth.co.uk/circlepopulations/), CC BY 4.0. Map © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright); [Leaflet](https://leafletjs.com/).
+The code is under the [MIT licence](LICENSE). The page is adapted from Tom Forth's [Population around a point](https://www.tomforth.co.uk/circlepopulations/), under CC BY 4.0. The data comes from many publishers, each with its own licence and required attribution; the stop layers derive from OpenStreetMap and are available under the ODbL. All are listed in [Credits and licences](docs/methodology.md#credits-and-licences).

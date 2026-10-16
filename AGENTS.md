@@ -11,7 +11,7 @@ Source repository: https://github.com/joshp123/moneymap, MIT licence. The page f
 The Site is a public ChatGPT Site. `.openai/hosting.json` holds its project ID and the `TILES` R2 binding. The Worker and the tiles deploy separately.
 
 1. Build the layers and run the checks in [README.md](README.md). Review the results, then commit.
-2. Deploy the Worker with the Sites skill's source workflow (`site-workflow.mjs`). Pass the commands `[["bash", "deploy/build.sh"], ["node", "deploy/validate-artifact.mjs"]]`, then save and deploy the version. Keep the audience public. `deploy/build.sh` copies `worker/index.js` to `dist/server/index.js` and `.openai/hosting.json` to `dist/.openai/hosting.json`, and stamps the footer with the commit.
+2. Check the working tree is clean before deploying: the Sites helper works in the checkout it has recorded for this Site (this one), not the current directory, and it commits anything uncommitted. Then deploy the Worker with the Sites skill's source workflow (`site-workflow.mjs`). Pass the commands `[["bash", "deploy/build.sh"], ["node", "deploy/validate-artifact.mjs"]]`, then save and deploy the version. Keep the audience public. `deploy/build.sh` copies `worker/index.js` to `dist/server/index.js` and `.openai/hosting.json` to `dist/.openai/hosting.json`, and stamps the footer with the commit.
 3. Set the Site's `UPLOAD_TOKEN` runtime secret to a new random value with the Sites tools. Then sync the tiles, first with `--dry-run` to see the counts:
 
    ```sh
@@ -23,3 +23,5 @@ The Site is a public ChatGPT Site. `.openai/hosting.json` holds its project ID a
 4. Check the live Site: `devenv shell -- python -m checks.circles --origin https://moneymap.jjpcodes.com`.
 
 Deploy the Worker before syncing whenever the `/__upload/` endpoints change; the sync needs the deployed Worker's tile list.
+
+Agents testing the page must use their own browser (for Codex, its in-app browser), never Computer Use or the owner's own browsers.
