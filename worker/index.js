@@ -147,6 +147,14 @@ export default {
   },
 };
 
+// scripts/build.sh replaces the placeholder with the deployed git commit.
+const SOURCE_COMMIT = '__MONEYMAP_SOURCE_COMMIT__';
+const SOURCE_REPOSITORY = 'https://github.com/joshp123/moneymap';
+const deployedCommit = SOURCE_COMMIT.replace(/-dirty$/, '');
+const liveVersion = SOURCE_COMMIT.startsWith('__') ? 'local preview'
+  : `<a href="${SOURCE_REPOSITORY}/commit/${deployedCommit}">${deployedCommit.slice(0, 7)}</a>` +
+    (SOURCE_COMMIT.endsWith('-dirty') ? ' plus uncommitted changes' : '');
+
 const page = `<!doctype html>
 <html lang="en-GB">
 <head>
@@ -334,6 +342,12 @@ const page = `<!doctype html>
             top: 0;
         }
 
+        footer p {
+            margin-top: 2em;
+            text-align: center;
+            font-size: smaller;
+        }
+
         .top {
             margin-top: 0.2em;
             margin-bottom: 0.4em;
@@ -367,6 +381,7 @@ const page = `<!doctype html>
 <p>Workplace places: <a href="https://overturemaps.org/">Overture Maps Foundation</a>, September 2026 (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a> and <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>).</p>
 <p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
+<footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
 var map = L.map('map').setView([20, 0], 2);
 var CirclesLayer = L.featureGroup().addTo(map);
