@@ -769,7 +769,7 @@ function drawShareCard() {
   var detail = document.getElementById(mode === 'property' ? 'billionairecounter' : 'stopcounter');
   if (!detail.hidden) drawWrapped(detail.textContent, y + 10, '20px sans-serif', 'black', 27);
   drawWrapped('moneymap.jjpcodes.com', height - 92, 'bold 34px sans-serif', '#183551', 40);
-  drawWrapped('Read the methodology before posting a screenshot on Twitter pwning me', height - 44, '15px sans-serif', '#183551', 20);
+  drawWrapped('Plz read the methodology b4 posting a screenshot on Twitter pwning me', height - 44, '15px sans-serif', '#183551', 20);
   return new Promise(function (resolve, reject) {
     canvas.toBlob(function (blob) {
       if (blob) resolve(blob);
@@ -866,7 +866,7 @@ map.addControl(new reloadControl());
 var methodologyNote = L.control({ position: 'bottomleft' });
 methodologyNote.onAdd = function () {
   var note = L.DomUtil.create('div', 'leaflet-control methodology-note');
-  note.innerHTML = '<a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Read the methodology before posting a screenshot on Twitter pwning me</a>';
+  note.innerHTML = '<a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Plz read the methodology b4 posting a screenshot on Twitter pwning me</a>';
   L.DomEvent.disableClickPropagation(note);
   return note;
 };
