@@ -2,7 +2,7 @@
 
 Experiment: are Overture places per cell a better workplace proxy than GHSL q?
 
-    nix shell nixpkgs#duckdb -c duckdb < scripts/extract_places.sql
+    nix shell nixpkgs#duckdb -c duckdb < sources/overture_places.sql
     nix shell nixpkgs#duckdb -c duckdb -c "COPY (FROM 'data/raw/overture/places_per_cell.parquet') TO '/tmp/moneymap-places/places_per_cell.csv' (HEADER)"
     devenv shell -- python research/gdp/places_eval.py sums us|uk|eu|br|units
     devenv shell -- python research/gdp/places_eval.py report
@@ -28,11 +28,23 @@ from rasterio.windows import Window, from_bounds
 from affine import Affine
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'scripts'))
-from build_layers import BUILD, RAW, PolygonIndex, grouped_sum, open_zip_raster, shifted_q  # noqa: E402
-from build_tiles import clean_window, open_sources  # noqa: E402
-from check_gdp_layers import CIRCLES, bounding_window, window_strips  # noqa: E402
-from gdp_controls import load_us_controls  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from layers.gdp.building_weight import building_weight_q as shifted_q  # noqa: E402
+from layers.gdp.cell_ownership import PolygonIndex, sum_by_unit as grouped_sum  # noqa: E402
+from layers.grid import (bounding_window, open_kummu_gdp_and_population as open_sources,  # noqa: E402
+                         open_zipped_raster as open_zip_raster, read_window_zero_filled as clean_window, window_strips)
+from sources.regional_gdp import REGIONAL_GDP_SOURCES as RAW, load_us_controls  # noqa: E402
+
+# This experiment scored the second GDP build, before workplace places and jobs were added.
+BUILD = ROOT / 'data/gdp-v2'
+CIRCLES = [
+    ('Midtown and Lower Manhattan', 40.73756, -73.99429, 6),
+    ('Bank', 51.5133, -0.0886, 3), ('Canary Wharf', 51.5054, -0.0235, 3),
+    ('Heathrow', 51.4700, -0.4543, 3), ('Zuidas', 52.3383, 4.8728, 3),
+    ('Schiphol', 52.3105, 4.7683, 3), ('Maasvlakte', 51.9600, 4.0300, 5),
+    ('Rotterdam', 51.93467, 4.55658, 50),
+    ('Tokyo Marunouchi', 35.6812, 139.7671, 3), ('La Défense', 48.8920, 2.2380, 3),
+]
 
 import os
 PLACES_CSV = Path(os.environ.get('PLACES_CSV', '/tmp/moneymap-places/places_per_cell.csv'))

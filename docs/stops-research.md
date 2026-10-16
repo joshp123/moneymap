@@ -27,6 +27,6 @@ Utrecht differs because its tram stops were retagged in OSM on 18 May 2026 (`rai
 
 Per-cell counts summed inside Amsterdam 5 km: 684/352/33 against Tom's 696/345/33; 1 km shows cell rounding (38/37/3 against 40/33/6), as population does.
 
-Extraction: `scripts/extract_stops.sql` reads about 3.2 GB of the 13.8 GB infrastructure files (157.6 million features); about 20 minutes at 3 MB/s.
+Extraction: `sources/overture_stops.sql` reads about 3.2 GB of the 13.8 GB infrastructure files (157.6 million features); about 20 minutes at 3 MB/s.
 
 Licence note [inferred, not legal advice]: publicly served stop tiles are probably an ODbL derived database and should be offered under ODbL; the population and GDP layers are separate data.

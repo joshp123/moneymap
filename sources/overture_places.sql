@@ -6,7 +6,7 @@
 -- category sits in an office, business-service, industrial, government-office or
 -- research branch of the Overture taxonomy; agricultural services are excluded.
 -- Run from the repository root:
---   nix shell nixpkgs#duckdb -c duckdb < scripts/extract_places.sql
+--   nix shell nixpkgs#duckdb -c duckdb < sources/overture_places.sql
 INSTALL httpfs; LOAD httpfs;
 SET s3_region='us-west-2'; SET http_timeout=120; SET http_retries=8;
 CREATE TEMP TABLE workplace_category AS

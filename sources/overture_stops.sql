@@ -2,7 +2,7 @@
 -- Counts bus, tram and metro/train stops per GHS-POP 30 arc-second cell from
 -- Overture Maps (base/infrastructure/transit, OpenStreetMap-derived, ODbL).
 -- Class mapping reproduces Tom Forth's counts. Run from the repository root:
---   nix shell nixpkgs#duckdb -c duckdb < scripts/extract_stops.sql
+--   nix shell nixpkgs#duckdb -c duckdb < sources/overture_stops.sql
 INSTALL httpfs; LOAD httpfs;
 SET s3_region='us-west-2'; SET http_timeout=120; SET http_retries=8;
 COPY (

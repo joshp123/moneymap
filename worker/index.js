@@ -107,34 +107,52 @@ async function circle(bucket, { latitude, longitude, radius }) {
   return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops), cumulative };
 }
 
+// deploy/sync-tiles.mjs lists, writes and deletes one layer's tiles here. Without the token these paths do not exist.
+// GET /__upload/layers/<layer>/ returns {key: etag}; R2's etag is the MD5 of the tile.
+// PUT and DELETE /__upload/layers/<layer>/<tileRow>/<tileColumn>.bin write or remove one tile.
+const TILE_SYNC_PATH = new RegExp(`^/__upload/(layers/(?:${LAYERS.join('|')})/)(?:(\\d+)/(\\d+)\\.bin)?$`);
+const notFound = () => new Response('Not found', { status: 404 });
+
+async function layerTileEtags(bucket, prefix) {
+  const etags = {};
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix, cursor });
+    for (const object of page.objects) etags[object.key] = object.etag;
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return etags;
+}
+
+async function handleTileSyncRequest(request, env, pathname) {
+  if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) return notFound();
+  const match = TILE_SYNC_PATH.exec(pathname);
+  if (!match) return notFound();
+  const [, layerPrefix, tileRow, tileColumn] = match;
+  if (tileRow === undefined) {
+    return request.method === 'GET' ? Response.json(await layerTileEtags(env.TILES, layerPrefix)) : notFound();
+  }
+  if (Number(tileRow) >= Math.ceil(GRID.height / GRID.tileSize) || Number(tileColumn) >= Math.ceil(GRID.width / GRID.tileSize)) {
+    return new Response('Invalid tile coordinates', { status: 400 });
+  }
+  const key = `${layerPrefix}${tileRow}/${tileColumn}.bin`;
+  if (request.method === 'PUT') {
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength !== TILE_BYTES) return new Response('Invalid tile size', { status: 400 });
+    await env.TILES.put(key, bytes);
+    return new Response(null, { status: 201 });
+  }
+  if (request.method === 'DELETE') {
+    await env.TILES.delete(key);
+    return new Response(null, { status: 204 });
+  }
+  return notFound();
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const oldTile = /^\/__upload\/(tiles\/\d+\/\d+\.bin)$/.exec(url.pathname);
-    if (oldTile && request.method === 'DELETE') {
-      if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) {
-        return new Response('Not found', { status: 404 });
-      }
-      await env.TILES.delete(oldTile[1]);
-      return new Response(null, { status: 204 });
-    }
-    const upload = /^\/__upload\/(layers\/(?:gdp|population|bus_stops|tram_stops|rail_stops)\/(\d+)\/(\d+)\.bin)$/.exec(url.pathname);
-    if (upload && (request.method === 'PUT' || request.method === 'HEAD')) {
-      if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) {
-        return new Response('Not found', { status: 404 });
-      }
-      if (Number(upload[2]) >= Math.ceil(GRID.height / GRID.tileSize) || Number(upload[3]) >= Math.ceil(GRID.width / GRID.tileSize)) {
-        return new Response('Invalid tile coordinates', { status: 400 });
-      }
-      if (request.method === 'HEAD') {
-        const object = await env.TILES.head(upload[1]);
-        return new Response(null, { status: object ? 200 : 404, headers: object ? { 'content-length': String(object.size) } : {} });
-      }
-      const bytes = await request.arrayBuffer();
-      if (bytes.byteLength !== TILE_BYTES) return new Response('Invalid tile size', { status: 400 });
-      await env.TILES.put(upload[1], bytes);
-      return new Response(null, { status: 201 });
-    }
+    if (url.pathname.startsWith('/__upload/')) return handleTileSyncRequest(request, env, url.pathname);
     if (request.method === 'GET' && url.pathname === '/') {
       return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8' } });
     }
@@ -143,11 +161,11 @@ export default {
       if (!parameters) return new Response('Use lat from -90 to 90, long from -180 to 180 and distance_km from 3 to 100.', { status: 400 });
       return Response.json(await circle(env.TILES, parameters));
     }
-    return new Response('Not found', { status: 404 });
+    return notFound();
   },
 };
 
-// scripts/build.sh replaces the placeholder with the deployed git commit.
+// deploy/build.sh replaces the placeholder with the deployed git commit.
 const SOURCE_COMMIT = '__MONEYMAP_SOURCE_COMMIT__';
 const SOURCE_REPOSITORY = 'https://github.com/joshp123/moneymap';
 const deployedCommit = SOURCE_COMMIT.replace(/-dirty$/, '');

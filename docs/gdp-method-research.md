@@ -94,7 +94,7 @@ Claude's change: for "elsewhere", use Kummu's reported admin-1 units, not its ma
 
 Written by AI on 2026.10.16 by model claude opus 5.5 (research subagent). Code in `research/gdp/places_*.py`; outputs in `data/experiments/places/`.
 
-Overture places release 2026-09-23.1: 80.5 million open places in 5.9 million cells (`scripts/extract_places.sql`, `data/raw/overture/places_per_cell.parquet`). "Workplace" places (13.9 million): office, finance, legal, professional, real estate, media, design, technical, telecoms, business-to-business (not agriculture), industrial, government offices, education offices, research institutes; list fixed before scoring. Licence CDLA Permissive 2.0 and Apache 2.0; credit "Overture Maps Foundation, overturemaps.org".
+Overture places release 2026-09-23.1: 80.5 million open places in 5.9 million cells (`sources/overture_places.sql`, `data/raw/overture/places_per_cell.parquet`). "Workplace" places (13.9 million): office, finance, legal, professional, real estate, media, design, technical, telecoms, business-to-business (not agriculture), industrial, government offices, education offices, research institutes; list fixed before scoring. Licence CDLA Permissive 2.0 and Apache 2.0; credit "Overture Maps Foundation, overturemaps.org".
 
 Share of GDP in the wrong unit (median |log ratio|), same production control totals:
 

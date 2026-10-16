@@ -1,9 +1,16 @@
-# Written by AI on 2026.10.16 by model gpt-6.1-sol.
-"""Official spatial GDP/GVA controls, in each source's nominal currency.
+"""Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude opus 5.5.
 
-Only within-country shares are used. ``load_controls`` returns the controls and
-their spatial country sums, excluding extra-regio values without a location.
-``load_published_totals`` retains the published totals for comparison.
+Regional GDP tables and boundaries, read as control units for the GDP layer.
+
+Kummu's reported admin-1 units cover the world. Official tables replace them in
+the US (BEA counties), UK (ONS small areas), Netherlands (CBS COROP-plus) and
+other European countries (Eurostat NUTS3). Official values are in each source's
+nominal currency; only their within-country shares are used.
+``load_official_controls`` returns the official units and their spatial country
+sums, excluding extra-regio values without a location.
+
+Inputs are in data/raw/research-gdp/; missing Scotland and Northern Ireland
+boundaries, GISCO NUTS boundaries and the CBS table are downloaded.
 """
 
 from collections import defaultdict
@@ -23,13 +30,14 @@ from shapely import get_coordinates, set_coordinates
 from shapely.geometry import mapping, shape
 from shapely.ops import unary_union
 
+from layers.grid import ROOT
+
+REGIONAL_GDP_SOURCES = ROOT / "data/raw/research-gdp"
+KUMMU_ADMIN1_UNITS = REGIONAL_GDP_SOURCES / "polyg_adm1_gdp_perCapita_1990_2024.gpkg"
 
 BEA_SOURCE = "https://apps.bea.gov/regional/zip/CAGDP1.zip"
 BEA_MAPPING_SOURCE = "https://www.bea.gov/system/files/methodologies/BEA-County-Personal-Income-Concepts-and-Methods.pdf"
 ONS_SOURCE = "https://www.ons.gov.uk/economy/grossvalueaddedgva/datasets/uksmallareagvaestimates"
-ONS_LA_SOURCE = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/datasets/regionalgrossdomesticproductlocalauthorities"
-ONS_REGIONS_SOURCE = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/datasets/regionalgrossdomesticproductallnutslevelregions"
-ONS_REGIONS_DOWNLOAD = "https://www.ons.gov.uk/file?uri=%2Feconomy%2Fgrossdomesticproductgdp%2Fdatasets%2Fregionalgrossdomesticproductallnutslevelregions%2F1998to2024%2Fregionalgrossdomesticproductgdpbyallinternationalterritoriallevelitlregions.xlsx"
 CBS_SOURCE = "https://opendata.cbs.nl/ODataApi/OData/85924NED"
 EUROSTAT_SOURCE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10r_3gdp?unit=MIO_EUR&time=2023"
 SCOTLAND_BOUNDARIES = "https://maps.gov.scot/ATOM/shapefiles/SG_DataZoneBdry_2011.zip"
@@ -230,73 +238,17 @@ def load_eu_controls(directory):
     return controls
 
 
-def load_controls(directory):
+def load_kummu_reported_controls():
+    """Kummu's reported admin-1 units, or whole countries without subnational data."""
+    with fiona.open(KUMMU_ADMIN1_UNITS) as source:
+        return [Control(f["properties"]["iso3"], str(int(f["properties"]["GID_nmbr"])),
+                        f["properties"]["Subnat"], dict(f["geometry"]), 0, "Kummu reported admin-1")
+                for f in source]
+
+
+def load_official_controls(directory=REGIONAL_GDP_SOURCES):
     controls = load_us_controls(directory) + load_uk_controls(directory) + load_nl_controls(directory) + load_eu_controls(directory)
     country_totals = defaultdict(float)
     for control in controls:
         country_totals[control.country] += control.value
     return controls, dict(country_totals)
-
-
-def load_published_totals(directory):
-    """National totals; includes extra-regio GDP and French overseas departments."""
-    totals = {EU_COUNTRIES[code]: value for code, value in _eurostat_values(directory).items() if code in EU_COUNTRIES}
-    totals["USA"] = _bea_values(Path(directory))["00000"][1]
-    totals["NLD"] = _cbs_values(directory)["NL01"]
-    # ONS small-area publication provides spatial building blocks, not UK total.
-    totals["GBR"] = math.fsum(row["value"] for row in uk_small_area_rows(directory))
-    return totals
-
-
-def _uk_gdp2024_total(directory):
-    # Some 2024 local authorities are suppressed. Use the unaffected UK total.
-    path = Path(directory) / "ons_regions_gdp_2024.xlsx"
-    _download_if_missing(path, ONS_REGIONS_DOWNLOAD)
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    rows = workbook["Table 5"].iter_rows(values_only=True)
-    next(rows)
-    year_column = next(rows).index("2024")
-    total = next(float(row[year_column]) * 1_000_000 for row in rows if row[0] == "UK" and row[1] == "UK")
-    workbook.close()
-    return total
-
-
-def load_official_comparisons(directory, controls=None):
-    """Named unit figures with the denominator from the same table and year."""
-    directory = Path(directory)
-    if controls is None:
-        controls, _ = load_controls(directory)
-    spatial_totals = defaultdict(float)
-    lookup = {}
-    for control in controls:
-        spatial_totals[control.country] += control.value
-        lookup[control.code] = control
-    result = {}
-
-    def add(name, control, year, unit, measure="GDP", country_total=None):
-        result[name] = {"country": control.country, "code": control.code, "name": control.name,
-                        "geometry": control.geometry, "value": control.value,
-                        "country_total": spatial_totals[control.country] if country_total is None else country_total,
-                        "year": year, "unit": unit, "measure": measure, "source": control.source}
-
-    add("Manhattan", lookup["36061"], 2024, "current USD")
-    for name, prefix in [("Groot-Amsterdam", "CP23"), ("Groot-Rijnmond", "CP29")]:
-        children = [control for control in controls if control.country == "NLD" and control.code.startswith(prefix)]
-        add(name, Control("NLD", prefix, name, _union(control.geometry for control in children), math.fsum(control.value for control in children), CBS_SOURCE), 2023, "current EUR")
-    for name, code in [("Amsterdam municipality", "CP2311"), ("Haarlemmermeer en omgeving", "CP2323")]:
-        add(name, lookup[code], 2023, "current EUR")
-    workbook = load_workbook(directory / "ons_la_gdp_2024.xlsx", read_only=True, data_only=True)
-    rows = workbook["Table 5"].iter_rows(values_only=True)
-    next(rows)
-    year_column = next(rows).index("2024")
-    la_values = {row[1]: float(row[year_column]) * 1_000_000 for row in rows if len(row) > year_column and isinstance(row[1], str) and row[1].startswith(("E", "W", "S", "N")) and isinstance(row[year_column], (int, float))}
-    workbook.close()
-    uk_gdp2024_total = _uk_gdp2024_total(directory)
-    for name, code in [("City of London", "E09000001"), ("Westminster", "E09000033")]:
-        children = [control for control in controls if control.country == "GBR" and control.parent_code == code]
-        control = Control("GBR", code, name, _union(child.geometry for child in children), math.fsum(child.value for child in children), ONS_SOURCE)
-        add(name + " 2023 GVA", control, 2023, "current GBP", "GVA")
-        key = name + " 2024 GDP"
-        add(key, Control("GBR", code, name, control.geometry, la_values[code], ONS_LA_SOURCE), 2024, "current GBP", country_total=uk_gdp2024_total)
-        result[key]["country_total_source"] = ONS_REGIONS_SOURCE
-    return result
