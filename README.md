@@ -36,15 +36,15 @@ The preview imports the actual Worker and supplies a local filesystem implementa
 
 ## Upload after deployment
 
-Deployment is a separate task. Set the Worker secret `UPLOAD_TOKEN` and bind R2 as `TILES`. The Site project root is this repository; `.openai/hosting.json` deliberately has no project ID yet.
+The owner-private Site is https://moneymap.jjpcodes.chatgpt.site (slug `moneymap`). Its project ID and `TILES` binding are in `.openai/hosting.json`. The runtime secret `UPLOAD_TOKEN` is configured in Sites. This repository is the Site project root.
 
 ```sh
-devenv shell -- node scripts/upload-tiles.mjs https://YOUR-SITE-ORIGIN
+devenv shell -- node scripts/upload-tiles.mjs https://moneymap.jjpcodes.chatgpt.site
 ```
 
-Enter one JSON line at the hidden stdin prompt with `uploadToken` and `siteAccessToken`. Do not put credentials in arguments or files. The Site access token is sent in `OAI-Sites-Authorization`. Upload uses six concurrent requests and retries temporary failures. An authenticated HEAD check skips existing tiles of the expected size, so an interrupted upload can be rerun. This assumes the same fixed dataset; it does not detect different content of the same size.
+Enter one JSON line at the hidden stdin prompt with `uploadToken` and `siteAccessToken`. Do not put credentials in arguments or files. The Site access token is sent in `OAI-Sites-Authorization`. Upload uses 48 concurrent requests and retries temporary failures. An authenticated HEAD check skips existing tiles of the expected size, so an interrupted upload can be rerun. This assumes the same fixed dataset; it does not detect different content of the same size.
 
-The starter build and validation scripts are retained for the later deployment task. No deployment is needed for local preview.
+Use the Sites skill source workflow to build, validate, push and package this repository, then deploy with the owner-private operation. No deployment is needed for local preview.
 
 ## Verified locally on 16 October 2026
 
@@ -52,4 +52,4 @@ The starter build and validation scripts are retained for the later deployment t
 
 All nine requested circles and every whole-kilometre row match the separate source-raster calculation within floating-point rounding. Tom's live population API differs by 0.008% to 0.737%; no values were tuned. The initial local HTTP queries took 32.1 ms for Rotterdam at 50 km and 5.9 ms for Paris at 100 km. These are local filesystem timings, not deployed R2 timings. The page was also inspected in a browser with the real Rotterdam data.
 
-The uploader has not sent any data. Site creation, deployment, remote upload and production timings remain for the next task.
+Runtime credentials are held by Sites and are not stored in this repository. The page, API and tile format are unchanged for deployment.

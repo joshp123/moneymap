@@ -63,7 +63,7 @@ async function request(path, method, body) {
 let next = 0, uploaded = 0, skipped = 0;
 const progress = setInterval(() => console.log(`${uploaded + skipped}/${paths.length}: ${uploaded} uploaded, ${skipped} already present`), 5000);
 try {
-  await Promise.all(Array.from({ length: 6 }, async () => {
+  await Promise.all(Array.from({ length: 48 }, async () => {
     while (next < paths.length) {
       const path = paths[next++];
       const existing = await request(path, 'HEAD');
