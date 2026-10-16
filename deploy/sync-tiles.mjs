@@ -9,7 +9,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value'];
+const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
 const TILE_BYTES = 120 * 120 * 4;
 const dataDirectory = resolve(import.meta.dirname, '../data');
 const [originArgument, ...rest] = process.argv.slice(2);

@@ -7,6 +7,7 @@ A circle's totals are the sums of every 30 arc-second grid cell (about 1 km acro
 - **Population** is GHS-POP R2023A residents in 2025, unchanged.
 - **GDP** is purchasing power parity (PPP), in 2021 international dollars. Country totals are Kummu et al.'s 2024 figures. Within each country, GDP is placed where it is produced, as described below.
 - **Land value** excludes buildings, in 2024 US dollars at market exchange rates. National balance sheets and a fixed model supply country totals; density-weighted population and production GDP supply their spatial shares.
+- **Building value** is the net value of dwellings and non-residential buildings, excluding civil-engineering structures, in the same dollars. **Property value** is land plus buildings.
 - **Stops** are bus, tram, and metro and train stops from OpenStreetMap via Overture Maps, counted in the cell that contains them.
 
 All layers share one grid and tile format, described in `layers/grid.py`. The Worker (`worker/index.js`) reads the tiles and sums them.
@@ -104,13 +105,69 @@ The small differences come from global density, country-wide component normalisa
 
 The method research and independent review are in [land value research](land-value-research.md).
 
+## Building and property value
+
+`sources/building_value.py` reads whole-economy OECD Table 9B net dwellings (N111N) plus non-residential buildings (N1121N). It excludes roads, bridges, pipelines and other civil-engineering structures (N1122), and land improvements (N1123). Net stocks include depreciation. Each reporter's latest matched-year buildings/GDP ratio scales its stock to 2024 market-exchange-rate GDP, using the same GDP sources and labelled territorial fallbacks as land. There are 32 reporters: twenty use 2024, ten 2023, Latvia 2022 and Russia 2019. Croatia and Mexico have valid whole-economy building stocks even though their land figures are partial. Australia, Chile and Romania lack a separate non-residential building total and use the model for their entire building stock.
+
+For the remaining 203 countries and territories, buildings equal 1.9296467110 × GDP. This is the geometric mean buildings/GDP ratio across the reporting countries. Four small log-ratio models were compared by leaving each reporter out and refitting on the other 31. The constant has both the fewest parameters and the lowest held-out log root mean square error:
+
+| National buildings/GDP model | Leave-one-out log RMSE |
+|---|---:|
+| Constant, adopted | 0.297394 |
+| Big-city population share | 0.307796 |
+| Log PPP GDP per head | 0.300542 |
+| Both covariates | 0.311506 |
+
+The constant's held-out error factor is exp(0.297394) = 1.346345; median absolute log ratio is 0.201217. Taiwan's DGBAS wealth table combines buildings and constructions, so it cannot supply the requested building-only total. Taiwan uses the model and DGBAS's 2024 GDP of US$801.529 billion. No civil-engineering stock is included to fill missing building data. Inputs and provenance are in `data/raw/building-value/`; each country's target, ratio, source and year are written to `data/build/building_value/country_totals.csv`.
+
+`layers/building_value.py` spreads each country total by equal thirds of its population share, production GDP share and total building-volume share. GHSL GHS-BUILT-V supplies residential plus non-residential volume for 2025. The built grid is checked against the population grid and shifted by the same 0.8/0.2 column overlap as GDP. Allocation uses the existing GDP/land country assignment. All 235 countries have positive owned population, GDP and building volume, so no fallback is needed. Land totals and allocation remain unchanged. The Worker sums each component separately; the page adds them for property value and retains both components in its table. `mode=land` links map to `mode=property`.
+
+### Totals and conservation
+
+| National building source | Countries and territories | Building value, USD trillion |
+|---|---:|---:|
+| OECD whole economy | 32 | 134.383929 |
+| Constant buildings/GDP model | 203 | 90.395393 |
+| World | 235 | 224.779322 |
+
+All 235 country targets are identical to the volume-only build and pass float32 conservation. Target building value is $224,779,322,124,150.75; the grid sums to $224,779,322,139,046.19, a $14,895.44 rounding difference. Maximum country relative error is 1.76 × 10⁻⁸. Tile read-back is $224,779,322,139,046.34, differing by sixteen cents from summation order. The layer has 16,013 tiles, 922,348,800 bytes. Together with unchanged land, the target world property total is $464.021345 trillion.
+
+### Held-out official valuations
+
+`checks/building_value.py` sums the production land and building grids inside the official boundaries. Each score compares spatial shares by scaling the predicted total over the valued units to the official total. Property scores use the sum of the actual land and building layers, retaining their component ratio. `--candidates` applies the same production allocation to four fixed rules, with each component normalised over its country: A, total volume; B, population; C, half population and half GDP; D, equal thirds population, GDP and volume.
+
+Each table entry is wrong-value share / median absolute log ratio. The first four tests score buildings; Amsterdam scores residential land plus buildings. The mean gives each test equal weight, including the two residential diagnostics.
+
+| Held-out area | Units | A: volume | B: population | C: population/GDP | D: population/GDP/volume |
+|---|---:|---:|---:|---:|---:|
+| Victoria councils | 79 | 19.5493% / 0.370168 | 16.0796% / 0.157840 | 14.9565% / 0.194816 | 15.2973% / 0.254545 |
+| British Columbia municipalities | 160 | 16.9084% / 0.388097 | 10.3979% / 0.215780 | 11.2623% / 0.322984 | 12.9354% / 0.354475 |
+| US owner-occupied residential diagnostic | 2,423 | 17.9535% / 0.443188 | 13.9327% / 0.321446 | 14.2506% / 0.253274 | 14.2113% / 0.307124 |
+| NYC community districts | 59 | 26.1208% / 0.452929 | 25.2078% / 0.397775 | 26.4073% / 0.363015 | 23.3853% / 0.349772 |
+| Amsterdam-area residential WOZ diagnostic | 73 | 25.8683% / 0.487924 | 23.2495% / 0.438860 | 26.1497% / 0.524504 | 26.0722% / 0.487319 |
+| Mean wrong-value share | | 21.2801% | 17.7735% | 18.6053% | 18.3803% |
+
+Population has the lowest mean, but fails the specified dense-core exception. Manhattan community districts 1–6 hold 23.9257% of NYC's official building value; population assigns 7.1242%, missing 70.2% of their share. Rule D is adopted because it has the lowest NYC wrong-value share and median log error, and the second-lowest mean. This remains an imperfect compromise: D assigns 42.6043% to those core districts, 78.1% above their official share. Across all Manhattan districts, D assigns 50.3410% against 34.6423% official. None of the four fixed rules reproduces dense-core shares closely. No weight was tuned to these places.
+
+Victoria uses 2026 capital improved value minus site value for improvements, and capital improved value for property. All 79 councils match, including the Moreland/Merri-bek rename. British Columbia uses the 2026 revised assessment roll at July 2025 values, with separate land and improvement values. These improvement figures can include fixtures or structures beyond the national buildings-only definition.
+
+The US check is a spatial diagnostic, not a like-for-like validation: ACS 2023 owner-occupied home values exclude rented housing and commercial property. Its building component is inferred using FHFA residential land shares.
+
+The dense-core check uses [NYC Department of Finance FY2024 final-roll market values](https://data.cityofnewyork.us/City-Government/Property-Valuation-and-Assessment-Data-Tax-Classes/8y4t-faws), joined to [official community-district boundaries](https://data.cityofnewyork.us/City-Government/Community-Districts/5crt-au7u). Buildings are final market total minus final market land, not assessed values. The test includes residential and commercial real estate in 1,146,125 lots across 59 districts, holding $1.313 trillion in building value. Ordinary roll records have unique lot IDs; condominium parent records have zero value. Parks, airports and missing or invalid board identifiers omit 0.414% of building value. Separate utility records are excluded. DOF statutory market valuations differ from national-account net stocks.
+
+The Amsterdam diagnostic uses the [CBS 2023 500 m grid](https://service.pdok.nl/cbs/vierkantstatistieken500m/2023/wfs/v1_0?service=WFS&request=GetCapabilities), with WOZ valuation date 1 January 2022. It aggregates mean home WOZ times dwelling count to 73 fixed 2 km squares, avoiding test units smaller than the production cells. This measures residential land plus buildings, not all property. It is approximate because dwelling counts are rounded and the WOZ mean excludes missing and extreme values, so the two denominators differ ([CBS definitions](https://www.cbs.nl/nl-nl/longread/diversen/2025/statistische-gegevens-per-vierkant-en-postcode-2022-2023-2024/4-beschrijving-cijfers)). The 2024 service had no published WOZ values in the requested area. Source geometries, exact requests and exclusions are retained under `data/raw/building-value/nyc/` and `europe/`.
+
+Full component scores and per-unit predictions are in `data/checks/building_value.json`; all candidate scores, dense-core diagnostics and ten candidate circles are in `data/checks/building_value_candidates.json`.
+
+For the adopted rule, property wrong-value shares / median absolute log ratios are Victoria 15.3431% / 0.260820, British Columbia 10.3865% / 0.291609, the US residential diagnostic 17.1897% / 0.359500, NYC 23.2392% / 0.350942, and Amsterdam 26.0722% / 0.487319. These compare land plus buildings; the building-only selection scores above do not substitute for them.
+
 ## Transit stops
 
 Stops come from Overture Maps' OpenStreetMap-derived transit infrastructure, with class rules that reproduce Tom Forth's counts (`sources/overture_stops.sql`, [stop research](stops-research.md)). Stop tiles reproduce the source totals exactly: 4,167,514 bus, 51,083 tram and 138,265 metro and train stops. Amsterdam 5 km returns 684/352/33 against Tom's 696/345/33; Rotterdam 50 km returns 11,645/900/238 against 11,622/1,036/180.
 
 ## Circle checks
 
-`checks/circles.py` queries the real Worker for 36 named circles and checks every total and cumulative kilometre row against direct sums over the GDP and land grids, GHS-POP and the stop counts. None of these reads a tile. Campus radii below the API's 3 km minimum use the existing 1 km or 2 km cumulative row. All checks pass; GDP, population and stops are unchanged by adding land. All 18 industry-experiment circles also match its results to float32 rounding.
+`checks/circles.py` queries the real Worker for 36 named circles and checks every total and cumulative kilometre row against direct sums over the GDP, land and building grids, GHS-POP and the stop counts. None of these reads a tile. Campus radii below the API's 3 km minimum use the existing 1 km or 2 km cumulative row. All checks pass; land, GDP, population and stops are unchanged by adding buildings, checked against `data/checks/circles-before-buildings.json`. All 18 industry-experiment circles also match its results to float32 rounding.
 
 GDP within US circles, in billions of 2021 international dollars:
 
@@ -139,22 +196,22 @@ GDP within US circles, in billions of 2021 international dollars:
 
 The non-US GDP circle results are unchanged. Preserve a circle report before rebuilding, then pass `--compare data/checks/circles-high-pay.json` to reproduce the old/new GDP comparison. Add `--unchanged-gdp` when checking a change that must preserve GDP.
 
-Land within the requested circles, in billions of 2024 US dollars:
+Property within the requested circles, in billions of 2024 US dollars. A–D are the four fixed building weights above. Candidate building values use the production allocator; D and its cumulative rows were also checked through the real Worker's local API. Land is unchanged.
 
-| Circle | Radius km | Land value |
-|---|---:|---:|
-| Cologne cathedral | 3 | 32.419 |
-| Cologne cathedral | 10 | 143.068 |
-| Düsseldorf | 10 | 126.221 |
-| Gelsenkirchen | 10 | 102.359 |
-| Amsterdam | 5 | 140.541 |
-| Rotterdam | 50 | 996.207 |
-| Midtown and Lower Manhattan | 6 | 1,096.066 |
-| London Bank | 3 | 439.409 |
-| Tokyo Marunouchi | 3 | 86.190 |
-| Sydney | 10 | 440.398 |
+| Circle | Radius km | Land | Buildings A | Buildings B | Buildings C | Buildings D | Property D |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Cologne cathedral | 3 | 32.419 | 24.623 | 30.665 | 45.886 | 38.798 | 71.217 |
+| Cologne cathedral | 10 | 143.068 | 144.078 | 170.024 | 198.941 | 180.654 | 323.722 |
+| Düsseldorf | 10 | 126.221 | 123.496 | 130.408 | 175.152 | 157.934 | 284.154 |
+| Gelsenkirchen | 10 | 102.359 | 147.571 | 148.088 | 137.597 | 140.921 | 243.281 |
+| Amsterdam | 5 | 140.541 | 40.477 | 68.458 | 112.907 | 88.764 | 229.305 |
+| Rotterdam | 50 | 996.207 | 779.308 | 753.048 | 792.175 | 787.886 | 1,784.093 |
+| Midtown and Lower Manhattan | 6 | 1,096.066 | 103.666 | 301.853 | 1,338.498 | 926.887 | 2,022.953 |
+| London Bank | 3 | 439.409 | 21.718 | 27.988 | 222.025 | 155.256 | 594.665 |
+| Tokyo Marunouchi | 3 | 86.190 | 12.239 | 12.983 | 46.735 | 35.236 | 121.426 |
+| Sydney | 10 | 440.398 | 81.986 | 159.315 | 194.724 | 157.145 | 597.543 |
 
-Warm local preview queries including land take 2.15–2.63 ms for Rotterdam 50 km and 4.72–4.94 ms for Paris 100 km, excluding remote storage latency. The page was checked in Safari on desktop and at a 375 px responsive viewport, including switching all three modes and changing the radius.
+Local preview query pairs including both property components took 4.69–9.11 ms for Rotterdam 50 km and 9.66–11.57 ms for Paris 100 km, excluding remote storage latency.
 
 ## History
 

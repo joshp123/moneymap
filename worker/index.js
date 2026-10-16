@@ -8,7 +8,7 @@ const EARTH_RADIUS_KM = 6371.0088;
 const RADIANS = Math.PI / 180;
 const TILE_CELLS = GRID.tileSize ** 2;
 const TILE_BYTES = TILE_CELLS * 4;
-const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value'];
+const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
 
 function circleParameters(searchParams) {
   const values = ['lat', 'long', 'distance_km'].map(name => {
@@ -23,8 +23,8 @@ function circleParameters(searchParams) {
   return { latitude, longitude, radius };
 }
 
-function totals(gdp, population, busStops, tramStops, railStops, landValue) {
-  return { gdp, population, land_value: landValue, gdp_per_head: population > 0 ? gdp / population : null,
+function totals(gdp, population, busStops, tramStops, railStops, landValue, buildingValue) {
+  return { gdp, population, land_value: landValue, building_value: buildingValue, gdp_per_head: population > 0 ? gdp / population : null,
     bus_stops: Math.round(busStops), tram_stops: Math.round(tramStops), rail_stops: Math.round(railStops) };
 }
 
@@ -45,6 +45,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
   const tramStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const railStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const landValueByKilometre = new Float64Array(Math.ceil(radius) + 1);
+  const buildingValueByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const tileCoordinates = [];
   for (let tileRow = Math.floor(firstRow / GRID.tileSize); tileRow <= Math.floor(lastRow / GRID.tileSize); tileRow++) {
     for (let tileColumn = Math.floor(firstColumn / GRID.tileSize); tileColumn <= Math.floor(lastColumn / GRID.tileSize); tileColumn++) {
@@ -60,7 +61,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
         if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${layer}/${tileRow}/${tileColumn}`);
         return new DataView(bytes);
       }));
-      const [gdpValues, populationValues, busStopValues, tramStopValues, railStopValues, landValues] = layers;
+      const [gdpValues, populationValues, busStopValues, tramStopValues, railStopValues, landValues, buildingValues] = layers;
       if (layers.every(layer => layer === null)) return;
       const rowStart = tileRow * GRID.tileSize;
       const columnStart = tileColumn * GRID.tileSize;
@@ -76,7 +77,8 @@ async function circle(bucket, { latitude, longitude, radius }) {
           const tramStops = tramStopValues ? tramStopValues.getFloat32(cellIndex * 4, true) : 0;
           const railStops = railStopValues ? railStopValues.getFloat32(cellIndex * 4, true) : 0;
           const landValue = landValues ? landValues.getFloat32(cellIndex * 4, true) : 0;
-          if (gdp === 0 && population === 0 && busStops === 0 && tramStops === 0 && railStops === 0 && landValue === 0) continue;
+          const buildingValue = buildingValues ? buildingValues.getFloat32(cellIndex * 4, true) : 0;
+          if (gdp === 0 && population === 0 && busStops === 0 && tramStops === 0 && railStops === 0 && landValue === 0 && buildingValue === 0) continue;
           const cellLongitude = GRID.west + (column + 0.5) * GRID.pixelWidth;
           const haversine = latitudeDistance + cosineProduct * Math.sin((cellLongitude - longitude) * RADIANS / 2) ** 2;
           const distance = 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.min(1, haversine)));
@@ -88,6 +90,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
             tramStopsByKilometre[kilometre] += tramStops;
             railStopsByKilometre[kilometre] += railStops;
             landValueByKilometre[kilometre] += landValue;
+            buildingValueByKilometre[kilometre] += buildingValue;
           }
         }
       }
@@ -99,6 +102,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
   let tramStops = tramStopsByKilometre[0];
   let railStops = railStopsByKilometre[0];
   let landValue = landValueByKilometre[0];
+  let buildingValue = buildingValueByKilometre[0];
   const cumulative = [];
   for (let kilometre = 1; kilometre <= Math.ceil(radius); kilometre++) {
     gdp += gdpByKilometre[kilometre];
@@ -107,9 +111,10 @@ async function circle(bucket, { latitude, longitude, radius }) {
     tramStops += tramStopsByKilometre[kilometre];
     railStops += railStopsByKilometre[kilometre];
     landValue += landValueByKilometre[kilometre];
-    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population, busStops, tramStops, railStops, landValue) });
+    buildingValue += buildingValueByKilometre[kilometre];
+    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population, busStops, tramStops, railStops, landValue, buildingValue) });
   }
-  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops, landValue), cumulative };
+  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops, landValue, buildingValue), cumulative };
 }
 
 // deploy/sync-tiles.mjs lists, writes and deletes one layer's tiles here. Without the token these paths do not exist.
@@ -384,9 +389,9 @@ const page = `<!doctype html>
 <div class="mode-switch" role="group" aria-label="Display">
 <button type="button" id="populationmode" aria-pressed="true">Population</button>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
-<button type="button" id="landmode" aria-pressed="false">Land value</button>
+<button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p style="text-align:center">Population, GDP and land value within a distance, from any point in the world.</p>
+<p style="text-align:center">Population, GDP and property value within a distance, from any point in the world.</p>
 <p style="text-align:center">Select a radius and click on the map.</p>
 <p style="text-align:center"><input type="range" id="range" min="3" value="5" max="100" step="1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<label for="range" id="rangelabel">5</label> km.</p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
@@ -405,7 +410,7 @@ const page = `<!doctype html>
 <p>Workplace places: <a href="https://overturemaps.org/">Overture Maps Foundation</a>, September 2026 (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a> and <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>).</p>
 <p>US workplace jobs: US Census Bureau, <a href="https://lehd.ces.census.gov/data/lodes/LODES8/">LEHD Origin-Destination Employment Statistics</a> (public domain).</p>
 <p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
-<p>Land value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
+<p>Land and building value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a> and <a href="https://eng.stat.gov.tw/News_Content.aspx?n=2336&amp;s=235628">Taiwan DGBAS national accounts</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
@@ -415,7 +420,11 @@ var selectedPoint = null;
 var pendingRequest = null;
 var lastResult = null;
 var params = new URLSearchParams(location.search);
-var mode = ['gdp', 'land'].includes(params.get('mode')) ? params.get('mode') : 'population';
+var mode = params.get('mode') === 'land' ? 'property' : ['gdp', 'property'].includes(params.get('mode')) ? params.get('mode') : 'population';
+if (params.get('mode') === 'land') {
+  params.set('mode', 'property');
+  history.replaceState({}, '', '?' + params);
+}
 var range = document.getElementById('range');
 var numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 function money(value) {
@@ -430,18 +439,18 @@ function perHead(value) {
 }
 function renderResult() {
   var isGDP = mode === 'gdp';
-  var isLand = mode === 'land';
-  var heading = isLand ? 'Land value' : isGDP ? 'GDP' : 'Population';
+  var isProperty = mode === 'property';
+  var heading = isProperty ? 'Property value' : isGDP ? 'GDP' : 'Population';
   document.getElementById('heading').textContent = heading + ' around a point';
   document.title = 'moneymap: ' + (isGDP ? 'GDP' : heading.toLowerCase()) + ' around a point';
   document.getElementById('populationmode').setAttribute('aria-pressed', String(mode === 'population'));
   document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
-  document.getElementById('landmode').setAttribute('aria-pressed', String(isLand));
-  document.getElementById('resultlabel').textContent = isLand ? 'Land value within circle (2024, US dollars, excluding buildings):' : isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
-  document.getElementById('maincounter').textContent = lastResult ? (isLand ? money(lastResult.land_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
+  document.getElementById('propertymode').setAttribute('aria-pressed', String(isProperty));
+  document.getElementById('resultlabel').textContent = isProperty ? 'Value of land and buildings within circle (2024, US dollars):' : isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
+  document.getElementById('maincounter').textContent = lastResult ? (isProperty ? money(lastResult.land_value + lastResult.building_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
   var secondary = '';
   if (lastResult) {
-    if (isLand) secondary = 'Population in 2025: ' + numberFormat.format(lastResult.population) + ' · GDP in 2024: ' + money(lastResult.gdp);
+    if (isProperty) secondary = 'Land: ' + money(lastResult.land_value) + ' · Buildings: ' + money(lastResult.building_value);
     else secondary = (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person');
   }
   document.getElementById('secondarycounter').textContent = secondary;
@@ -455,10 +464,10 @@ function renderTable() {
     return;
   }
   var showStops = mode === 'population';
-  var showLand = mode === 'land';
-  var tableHTML = '<table' + (showStops ? ' class="population-table"' : '') + '><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th>' + (showLand ? '<th>Land value</th>' : '') + (showStops ? '<th>Bus stops</th><th>Tram stops</th><th>Metro and train stops</th>' : '') + '</tr></thead><tbody>';
+  var showProperty = mode === 'property';
+  var tableHTML = '<table' + (showStops ? ' class="population-table"' : '') + '><thead><tr><th>Radius (km)</th>' + (showProperty ? '<th>Land</th><th>Buildings</th><th>Total</th>' : '<th>Population</th><th>GDP</th><th>GDP per head</th>') + (showStops ? '<th>Bus stops</th><th>Tram stops</th><th>Metro and train stops</th>' : '') + '</tr></thead><tbody>';
   lastResult.cumulative.forEach(function (row) {
-    tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td>' + (showLand ? '<td>' + money(row.land_value) + '</td>' : '') + (showStops ? '<td>' + numberFormat.format(row.bus_stops) + '</td><td>' + numberFormat.format(row.tram_stops) + '</td><td>' + numberFormat.format(row.rail_stops) + '</td>' : '') + '</tr>';
+    tableHTML += '<tr><td>' + row.distance_km + '</td>' + (showProperty ? '<td>' + money(row.land_value) + '</td><td>' + money(row.building_value) + '</td><td>' + money(row.land_value + row.building_value) + '</td>' : '<td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td>') + (showStops ? '<td>' + numberFormat.format(row.bus_stops) + '</td><td>' + numberFormat.format(row.tram_stops) + '</td><td>' + numberFormat.format(row.rail_stops) + '</td>' : '') + '</tr>';
   });
   document.getElementById('table').innerHTML = tableHTML + '</tbody></table>';
 }
@@ -472,7 +481,7 @@ function changeMode(nextMode) {
 }
 document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
 document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
-document.getElementById('landmode').addEventListener('click', function () { changeMode('land'); });
+document.getElementById('propertymode').addEventListener('click', function () { changeMode('property'); });
 renderResult();
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'

@@ -3,7 +3,7 @@
 Check the real Worker's circle API against the grids it should reproduce. For
 each named circle, every total and every cumulative kilometre row must match a
 direct sum over cell centres within that distance: GDP from the built GDP grid,
-population from GHS-POP, land value from its built grid, and stops from the
+population from GHS-POP, land and buildings from their built grids, and stops from the
 per-cell Parquet counts. None of these reads a tile, so the check covers the
 tiles, their upload and the Worker.
 
@@ -32,6 +32,7 @@ from layers.transit_stops import EXPECTED_TOTALS as STOP_LAYERS, STOPS_PER_CELL
 
 REPORT = ROOT / 'data/checks/circles.json'
 LAND_VALUE_RASTER = ROOT / 'data/build/land_value/land_value.tif'
+BUILDING_VALUE_RASTER = ROOT / 'data/build/building_value/building_value.tif'
 CIRCLES = [
     ('Midtown and Lower Manhattan', 40.73756, -73.99429, 6),
     ('Bank', 51.5133, -0.0886, 3), ('Canary Wharf', 51.5054, -0.0235, 3),
@@ -108,7 +109,7 @@ def assert_matches(actual, expected, where):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--origin', default='http://127.0.0.1:8787')
-    parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare GDP, population and stops')
+    parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare GDP, land, population and stops')
     parser.add_argument('--unchanged-gdp', action='store_true', help='Also require GDP to match --compare')
     arguments = parser.parse_args()
     baseline = {}
@@ -119,13 +120,15 @@ def main():
     report = {'origin': arguments.origin, 'circles': [], 'timings': []}
     kummu_gdp, population = open_kummu_gdp_and_population()
     with kummu_gdp, population, rasterio.open(GDP_BUILD_DIRECTORY / 'gdp.tif') as gdp, \
-            rasterio.open(LAND_VALUE_RASTER) as land_value:
+            rasterio.open(LAND_VALUE_RASTER) as land_value, \
+            rasterio.open(BUILDING_VALUE_RASTER) as building_value:
         for name, latitude, longitude, radius in CIRCLES:
             query_radius = max(3, radius)
             result, milliseconds = query(arguments.origin, latitude, longitude, query_radius)
             window, distances = cell_distances_km(gdp, latitude, longitude, query_radius)
             planes = dict(gdp=read_window_zero_filled(gdp, 1, window),
                           land_value=read_window_zero_filled(land_value, 1, window),
+                          building_value=read_window_zero_filled(building_value, 1, window),
                           population=read_window_zero_filled(population, 1, window),
                           **dict(zip(STOP_LAYERS, stops.window(window))))
             expected_rows, expected_total = expected_circle(planes, distances, query_radius)
@@ -136,13 +139,14 @@ def main():
             if radius < query_radius:
                 result = next(row for row in result['cumulative'] if row['distance_km'] == radius)
             circle = dict(name=name, latitude=latitude, longitude=longitude, radius_km=radius,
-                          **{key: result[key] for key in ('gdp', 'land_value', 'population', 'gdp_per_head', *STOP_LAYERS)},
+                          **{key: result[key] for key in ('gdp', 'land_value', 'building_value', 'population', 'gdp_per_head', *STOP_LAYERS)},
+                          property_value=result['land_value'] + result['building_value'],
                           milliseconds=milliseconds)
             if (name, radius) in baseline:
                 previous = baseline[(name, radius)]
                 circle['previous_gdp'] = previous['gdp']
                 circle['gdp_change'] = result['gdp'] - previous['gdp']
-                unchanged_fields = ('population', *STOP_LAYERS, *(('gdp',) if arguments.unchanged_gdp else ()))
+                unchanged_fields = ('population', 'land_value', *STOP_LAYERS, *(('gdp',) if arguments.unchanged_gdp else ()))
                 for field in unchanged_fields:
                     if field in previous:
                         np.testing.assert_allclose(result[field], previous[field], rtol=1e-12, atol=1e-3,
