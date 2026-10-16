@@ -2,7 +2,7 @@ Written by AI on 2026.10.16 by model gpt-6.1-sol.
 
 # moneymap
 
-Choose a radius from 3 to 100 km and click the map to see population, GDP and GDP per head. Population mode also shows bus, tram, metro and train stops. Population is the default mode; `mode=gdp` selects GDP. One Worker serves the page and circle API. The public site is https://moneymap.jjpcodes.com. V3 GDP and the stop display are currently local changes.
+Choose a radius from 3 to 100 km and click the map to see population, GDP and GDP per head. Population mode also shows bus, tram, metro and train stops. Population is the default mode; `mode=gdp` selects GDP. One Worker serves the page and circle API. The public site is https://moneymap.jjpcodes.com. The US workplace-jobs update is built locally before deployment.
 
 GDP is purchasing power parity (PPP), in 2021 international dollars. Population is for 2025; GDP country totals are for 2024.
 
@@ -23,11 +23,63 @@ V3 uses equal thirds population, q and workplace-place shares where a control un
 
 Grid ownership uses cell centres in Kummu's reported polygons. Occupied coastal cells outside those polygons go to the nearest reported unit, preserving every source dollar. Allocation uses the finer official boundaries where available, including coastal enclaves omitted from Kummu’s coarse outline. Remaining boundary gaps are filled with the nearest official unit in the same country. BEA's combined counties are joined before rasterisation. The five French overseas departments keep their separate Kummu country totals. Official shares use spatial unit sums, excluding unlocated extra-regio GDP. Allocation contributions are checked per unit before summing, including centroid contributions where small units share a grid cell.
 
+## US workplace-jobs update
+
+US county GDP is distributed by high-pay workplace jobs (`CE03`). This won the fixed state-to-county hold-out against the v3 mix, all jobs (`C000`), and equal shares of the two job distributions. Selection uses the smallest share of GDP placed in the wrong county. A county without high-pay jobs retains the v3 mix; all 3,115 counties have high-pay jobs in this build. County targets and every other country remain unchanged.
+
+LODES8 workplace blocks use their crosswalk internal points on the existing 30 arc-second grid. The crosswalk county field supplies the current county geography, including Connecticut planning regions; block-code county prefixes are older. Allocation retains the existing control-grid ownership, including BEA combined counties. All 50 states and DC use their latest available `S000_JT00` release: 2023 except Alaska (2016) and Michigan (2021). The grid exactly reproduces 150,944,613 total jobs and 86,331,982 high-pay jobs. Existing cell ownership leaves 2,741 jobs, including 1,138 high-pay jobs, outside US-owned cells (0.0018% and 0.0013%); they supply no allocation weight. GDP targets are still conserved. Cell mapping puts 0.471% of jobs in a neighbouring county, including 0.044% across state boundaries.
+
+The shared production allocator is scored on per-county component sums grouped into states. Linearity permits aggregation before allocation; float32 rounding occurs at county totals rather than individual cells. All 3,115 counties and 51 state/DC groups are included. DC contributes no within-state error. The v3 baseline uses the current production ownership rather than the earlier research mask.
+
+| US state → county hold-out | Wrong GDP share | Median absolute log ratio |
+|---|---:|---:|
+| Current v3 | 11.5617% | 0.238842 |
+| All jobs | 8.2829% | 0.165260 |
+| High-pay jobs, selected | 6.2128% | 0.146553 |
+| Half all jobs, half high-pay jobs | 6.9398% | 0.142179 |
+
+Rebuild and check with the v3 grid, control IDs and conservation report preserved under `data/gdp-v3/`:
+
+```sh
+devenv shell -- python scripts/lodes_grid.py
+devenv shell -- python scripts/check_us_jobs.py
+# Preserve data/layers/gdp as data/gdp-v3/tiles before replacing it.
+devenv shell -- python scripts/build_us_gdp.py
+devenv shell -- node scripts/preview.mjs
+# In another shell, while the preview is running:
+devenv shell -- python scripts/check_gdp_v4_circles.py
+```
+
+Before replacing the tiles, run the circle checker with `--baseline` against the v3 preview. The v4 builder writes `data/gdp-v4/gdp.tif`, `conservation.json` and `data/layers/gdp/`; the checker writes `holdouts.json` and `circles.json`. Population and stop tiles are preserved.
+
+Checked locally on 16 October 2026: all 48,314 control totals and 235 country totals pass float32 conservation, including all 3,115 US county controls. Maximum relative errors are 5.95 × 10⁻⁸ per unit and 2.01 × 10⁻⁸ per country. Source GDP remains $196,879,262,625,395; built GDP is $196,879,262,608,239.22, a $17,155.78 float32 difference across $196.8792626 trillion. Tile read-back is $196,879,262,608,238.88, differing by $0.34 from float64 summation order. All 907,888,781 non-US cells are identical to v3. GDP has 15,476 tiles, 891,417,600 bytes.
+
+All eleven circles below were checked through the real Worker, including every cumulative GDP row against the v4 raster. Population and stops are unchanged. Values are billions of 2021 international dollars.
+
+| Circle | Radius km | V3 GDP | V4 GDP |
+|---|---:|---:|---:|
+| Mountain View | 10 | 126.848 | 193.591 |
+| Palo Alto | 10 | 114.755 | 174.936 |
+| SF Financial District | 3 | 139.082 | 199.902 |
+| San Jose | 10 | 236.012 | 196.174 |
+| San Francisco | 10 | 284.119 | 278.429 |
+| Cupertino | 5 | 47.174 | 48.397 |
+| Menlo Park | 5 | 33.010 | 53.160 |
+| Santa Clara | 5 | 80.081 | 117.293 |
+| Midtown and Lower Manhattan | 6 | 881.694 | 1049.396 |
+| Seattle South Lake Union | 3 | 76.399 | 136.334 |
+| Redmond | 5 | 36.606 | 61.712 |
+
+The California research summed block internal points directly; production retains the required 30″ cell-centre rule. An independent raw-data check reproduces the research. Mountain View 10 km is $209.298bn at block points, $194.017bn after mapping those weights to cell centres, and $193.591bn with production county-cell ownership. One block containing 20,192 high-pay jobs moves from 9.758 km to a cell centre at 10.115 km, taking $10.553bn outside the circle. The comparison is saved in `data/gdp-v4/ca-point-check.json`; no weight or radius was adjusted.
+
+V3 GDP tiles remain in `data/gdp-v3/tiles/`. There are 129 retired tile keys and 6 new keys, listed in `data/gdp-v4/tile-changes.json`. A later deployment must replace GDP and remove the retired objects. No deployment or upload was performed; the preview is stopped.
+
 ## Sources
 
 - [Kummu et al. (2025)](https://doi.org/10.1038/s41597-025-04487-x), [13 March 2026 release](https://zenodo.org/records/18429133), CC BY 4.0: band 8, `gdp_2024`, of `rast_gdpTot_1990_2024_30arcsec.tif`, and reported admin-1 polygons. The release specifies 2021 international dollars; the embedded 2017 unit tag is stale.
 - [GHSL](https://human-settlement.emergency.copernicus.eu/): GHS-POP R2023A population, GHS-BUILT-V and GHS-BUILT-S R2023A non-residential volume and surface, all 2025, WGS84, 30 arc-seconds, CC BY 4.0.
 - [BEA CAGDP1](https://apps.bea.gov/regional/zip/CAGDP1.zip), county GDP 2024; [US Census](https://www2.census.gov/geo/tiger/GENZ2024/shp/), county boundaries 2024. US government data.
+- [US Census Bureau, LEHD Origin-Destination Employment Statistics (LODES8)](https://lehd.ces.census.gov/data/lodes/LODES8/), workplace jobs and block internal points, public domain. Raw WAC and crosswalk files, releases and job-grid totals are in `data/raw/lodes/`.
 - [ONS small-area GVA 2023](https://www.ons.gov.uk/economy/grossvalueaddedgva/datasets/uksmallareagvaestimates); ONS 2011 LSOA boundaries, [Scottish data zones](https://maps.gov.scot/ATOM/shapefiles/SG_DataZoneBdry_2011.zip), [Northern Ireland SOAs](https://www.nisra.gov.uk/files/nisra/publications/SOA2011_Esri_Shapefile_0.zip). Open Government Licence.
 - [Eurostat regional GDP](https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10r_3gdp?unit=MIO_EUR&time=2023) and [GISCO NUTS 2024 boundaries](https://gisco-services.ec.europa.eu/distribution/v2/nuts/), Eurostat reuse terms.
 - [CBS 85924NED](https://opendata.cbs.nl/ODataApi/OData/85924NED), GDP 2023; [PDOK COROP-plus 2024 boundaries](https://api.pdok.nl/cbs/gebiedsindelingen/ogc/v1), CC BY 4.0.
