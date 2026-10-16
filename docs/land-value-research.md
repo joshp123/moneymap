@@ -191,3 +191,23 @@ A log error of 0.35 is a factor 1.4. City centres are the hard case: 3 km around
 2. **Within each country**, cell weight = ½ × cell share of population × (population density within ~40 km)^0.25 + ½ × cell share of the site's GDP layer. Two inputs the site already has; one fixed exponent; no farmland step, no non-residential step. The density field is smooth, so compute it on a 5 arc-minute grid and interpolate [I].
 3. **Accuracy to expect** [V]: 13–22% of a country's land value in the wrong municipality or district; 10 km circles within a factor 1.4 in the median; 30–50 km circles within 1.3. City-centre circles in rich cities read low by up to 2×; non-reporting countries carry a further factor of about 1.6–1.9 on the total.
 4. What the model cannot see: regional price levels at equal density (Düsseldorf against Gelsenkirchen, Aspen, Nantucket, mining towns) and resort land. Only official valuations would fix that, and they exist for a handful of countries.
+
+## Land and building split (Fable, 17 October 2026)
+
+Written by AI on 2026.10.17 by model claude fable 5.1. Code in `research/split/`; outputs in `data/experiments/split/`.
+
+A smoke test showed the split was too flat: across US counties our land share ran 0.35–0.55 against FHFA's 0.13–0.67 (rank correlation 0.41). Five land rules and four building rules were frozen after looking only at odd-numbered US states, then scored on held-out data: US even states (counties, tracts, ZIP codes), New York City districts, Victoria, British Columbia, NRW, Japan, Denmark and Amsterdam.
+
+Adopted: land = ½ × share of P·D^0.5·Y² + ½ × share of G; buildings = 0.7 × share of P + 0.3 × share of G, where P is residents, D population density within 40 km, G the GDP layer, and Y the GDP per resident within 40 km relative to the national mean. National totals unchanged.
+
+| Measure (held out) | Before | After |
+|---|---|---|
+| Land in the wrong unit, mean of 8 tests | 22.6% | 20.6% |
+| Buildings in the wrong unit, mean of 5 tests | 19.9% | 18.2% |
+| Rank correlation with FHFA land share, tracts | 0.48 | 0.61 |
+| Rank correlation with FHFA land share, counties | 0.43 | 0.33 |
+| Land share, 10th–90th percentile of tracts (FHFA 0.15–0.52) | 0.35–0.50 | 0.23–0.59 |
+| Manhattan's share of NYC land (official 33%) | 48% | 36% |
+| Manhattan's share of NYC buildings (official 35%) | 50% | 43% |
+
+County ordering worsened because FHFA county shares carry state-level effects (Hawaii, Massachusetts and Oregon high; Kentucky, Texas and Nebraska low) that density and income cannot see; a regression on every input reaches only 0.38 on held-out counties. Honolulu reads worse (0.35 against 0.63); St Louis and Detroit stay too high; Düsseldorf's 3 km centre is still about 0.43 of official land value.
