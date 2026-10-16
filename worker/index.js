@@ -567,17 +567,16 @@ function money(value) {
   if (value >= 1e6) return '$' + Number((value / 1e6).toPrecision(3)) + ' million';
   return '$' + numberFormat.format(value);
 }
-// What the circle could buy, said the way a person would: the two nearest rungs on a
-// ladder with at least one rung per order of magnitude, and always Elon.
-// People: Forbes real-time profiles, 16 October 2026. Economies: World Bank GDP, 2025,
-// current US dollars. Things: approximate US list prices, 2025-26; Salvator Mundi's 2017
-// sale; a Big Mac from the Economist's January 2026 index; a Freddo is about 30p.
+// What the circle could buy, said the way a person would: the two nearest comparisons, at most
+// one of them a billionaire, from ladders with at least one rung per order of magnitude, then Elon.
+// People: Forbes real-time profiles, 16 October 2026. Companies: market values on 16 October
+// 2026. Twitter, Chelsea and Salvator Mundi: what their buyers paid in 2022, 2022 and 2017.
+// Other things: approximate US list prices, 2025-26; a Big Mac from the Economist's January
+// 2026 index; a Freddo is about 30p.
 // [singular, plural, value in US dollars, price shown if not dollars]
 var ELON_MUSK = ['Elon Musk', 'Elon Musks', 908.5e9];
 var FREDDO_BAR = ['Freddo bar', 'Freddo bars', 0.40, '30p'];
-var COMPARISON_LADDER = [
-  ['US economy', 'US economies', 30.77e12], ['Chinese economy', 'Chinese economies', 19.50e12],
-  ['UK economy', 'UK economies', 4.003e12], ['Dutch economy', 'Dutch economies', 1.333e12],
+var BILLIONAIRES = [
   ['Jeff Bezos', 'Jeff Bezoses', 369.8e9], ['Larry Page', 'Larry Pages', 279.3e9],
   ['Mark Zuckerberg', 'Mark Zuckerbergs', 243.3e9], ['Jensen Huang', 'Jensen Huangs', 186e9],
   ['Warren Buffett', 'Warren Buffetts', 151.1e9], ['Bill Gates', 'Bill Gateses', 117.7e9],
@@ -587,6 +586,10 @@ var COMPARISON_LADDER = [
   ['Steven Spielberg', 'Steven Spielbergs', 7.9e9], ['George Lucas', 'George Lucases', 5.4e9],
   ['Michael Jordan', 'Michael Jordans', 4.7e9], ['Oprah', 'Oprahs', 3.4e9],
   ['Taylor Swift', 'Taylor Swifts', 2.0e9], ['Rihanna', 'Rihannas', 1.0e9],
+];
+var THINGS = [
+  ['Apple', 'Apples', 5.01e12], ['Meta', 'Metas', 1.81e12], ['Coca-Cola', 'Coca-Colas', 404e9],
+  ['Twitter', 'Twitters', 44e9], ['Chelsea FC', 'Chelsea FCs', 3.1e9, '£2.5bn'],
   ['Salvator Mundi', 'Salvator Mundis', 450.3e6], ['Gulfstream G700', 'Gulfstream G700s', 78e6],
   ['Bugatti Tourbillon', 'Bugatti Tourbillons', 4.1e6], ['Lamborghini Revuelto', 'Lamborghini Revueltos', 608e3],
   ['Tesla Model Y', 'Tesla Model Ys', 45e3], ['iPhone 17 Pro', 'iPhone 17 Pros', 1099],
@@ -607,7 +610,7 @@ function inWords(count) {
   if (count >= 1e12) return rounded(count / 1e12) + ' trillion';
   if (count >= 1e9) return rounded(count / 1e9) + ' billion';
   if (count >= 1e6) return rounded(count / 1e6) + ' million';
-  return numberFormat.format(Math.round(count));
+  return numberFormat.format(Number(Math.round(count).toPrecision(2)));
 }
 function howMany(ratio, item) {
   var article = /^(?:[AEIOaeio]|[Uu][a-z])/.test(item[0]) ? 'an ' : 'a ';
@@ -622,24 +625,35 @@ function howMany(ratio, item) {
 function withPrice(ratio, item) {
   return howMany(ratio, item) + ' (' + (item[3] || shortMoney(item[2])) + (ratio >= 1.3 ? ' each' : '') + ')';
 }
-function inElonMusks(value) {
-  var ratio = value / ELON_MUSK[2];
-  var amount = ratio >= CLOSEST_RATIO ? howMany(ratio, ELON_MUSK)
-    : (ratio * 100).toLocaleString('en-GB', { maximumSignificantDigits: 2 }) + '% of an Elon Musk';
-  return amount + ' (' + shortMoney(ELON_MUSK[2]) + ')';
-}
-function inBillionaires(value) {
-  if (!(value > 0)) return { text: "That's not even one Freddo bar, or 0% of an Elon Musk." };
-  var nearest = COMPARISON_LADDER
+function nearestOnLadder(value, ladder) {
+  return ladder
     .map(function (item) { return { item: item, ratio: value / item[2] }; })
     .filter(function (match) { return match.ratio >= CLOSEST_RATIO && match.ratio <= FURTHEST_RATIO; })
-    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); })
-    .slice(0, 2);
-  var phrases = nearest.map(function (match) { return withPrice(match.ratio, match.item); });
-  if (phrases.length < 2 && !nearest.some(function (match) { return match.item === FREDDO_BAR; })) {
-    phrases.push(withPrice(value / FREDDO_BAR[2], FREDDO_BAR));
+    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); });
+}
+function whatElonCouldDo(value) {
+  var elon = ELON_MUSK[0] + ' (' + shortMoney(ELON_MUSK[2]) + ')';
+  var ratio = value / ELON_MUSK[2], timesOver = 1 / ratio;
+  if (ratio >= 1.3) return 'It would take ' + howMany(ratio, ELON_MUSK) + ' (' + shortMoney(ELON_MUSK[2]) + ' each) to buy it.';
+  if (ratio >= 0.85) return "It would take all of Elon Musk's money (" + shortMoney(ELON_MUSK[2]) + ') to buy it.';
+  if (timesOver < 1.75) return elon + ' could buy it one and a half times over.';
+  if (timesOver < 2.5) return elon + ' could buy it twice over.';
+  return elon + ' could buy it ' + inWords(timesOver) + ' times over.';
+}
+function inBillionaires(value) {
+  if (!(value >= 0.1)) return { text: "That's not even one Freddo bar, or 0% of an Elon Musk." };
+  var nearest = [], hasBillionaire = false;
+  nearestOnLadder(value, BILLIONAIRES.concat(THINGS)).forEach(function (match) {
+    var isBillionaire = BILLIONAIRES.indexOf(match.item) >= 0;
+    if (nearest.length === 2 || (isBillionaire && hasBillionaire)) return;
+    nearest.push(match);
+    hasBillionaire = hasBillionaire || isBillionaire;
+  });
+  if (nearest.length < 2 && !nearest.some(function (match) { return match.item === FREDDO_BAR; })) {
+    nearest.push({ item: FREDDO_BAR, ratio: value / FREDDO_BAR[2] });
   }
-  return { text: "That's about " + phrases.join(', ') + ' or ' + inElonMusks(value) + '.' };
+  var phrases = nearest.map(function (match) { return withPrice(match.ratio, match.item); });
+  return { text: "That's about " + phrases.join(' or ') + '. ' + whatElonCouldDo(value) };
 }
 function perHead(value) {
   return value === null ? '' : '$' + numberFormat.format(value);
