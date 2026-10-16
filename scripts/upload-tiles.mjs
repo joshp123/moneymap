@@ -86,7 +86,7 @@ function progressLine() {
 }
 const progress = setInterval(() => console.log(progressLine()), 5000);
 try {
-  await Promise.all(Array.from({ length: 8 }, async () => {
+  await Promise.all(Array.from({ length: 24 }, async () => {
     while (next < paths.length) {
       const path = paths[next++];
       const layer = deleteOldTiles ? 'tiles' : path.split('/')[0];
