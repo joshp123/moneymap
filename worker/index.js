@@ -567,14 +567,17 @@ function money(value) {
   if (value >= 1e6) return '$' + Number((value / 1e6).toPrecision(3)) + ' million';
   return '$' + numberFormat.format(value);
 }
-// What the circle could buy, said the way a person would: the nearest comparison on a
-// ladder with at least one rung per order of magnitude, a count of Freddo bars, and Elon.
-// People: Forbes real-time profiles, 16 October 2026. Things: approximate US list prices,
-// 2025-26; Salvator Mundi's 2017 sale price. A Freddo is about 30p ($0.40).
-// [singular, plural, value in US dollars]
+// What the circle could buy, said the way a person would: the two nearest rungs on a
+// ladder with at least one rung per order of magnitude, and always Elon.
+// People: Forbes real-time profiles, 16 October 2026. Economies: World Bank GDP, 2025,
+// current US dollars. Things: approximate US list prices, 2025-26; Salvator Mundi's 2017
+// sale; a Big Mac from the Economist's January 2026 index; a Freddo is about 30p.
+// [singular, plural, value in US dollars, price shown if not dollars]
 var ELON_MUSK = ['Elon Musk', 'Elon Musks', 908.5e9];
-var FREDDO_BAR = ['Freddo bar', 'Freddo bars', 0.40];
+var FREDDO_BAR = ['Freddo bar', 'Freddo bars', 0.40, '30p'];
 var COMPARISON_LADDER = [
+  ['US economy', 'US economies', 30.77e12], ['Chinese economy', 'Chinese economies', 19.50e12],
+  ['UK economy', 'UK economies', 4.003e12], ['Dutch economy', 'Dutch economies', 1.333e12],
   ['Jeff Bezos', 'Jeff Bezoses', 369.8e9], ['Larry Page', 'Larry Pages', 279.3e9],
   ['Mark Zuckerberg', 'Mark Zuckerbergs', 243.3e9], ['Jensen Huang', 'Jensen Huangs', 186e9],
   ['Warren Buffett', 'Warren Buffetts', 151.1e9], ['Bill Gates', 'Bill Gateses', 117.7e9],
@@ -587,10 +590,12 @@ var COMPARISON_LADDER = [
   ['Salvator Mundi', 'Salvator Mundis', 450.3e6], ['Gulfstream G700', 'Gulfstream G700s', 78e6],
   ['Bugatti Tourbillon', 'Bugatti Tourbillons', 4.1e6], ['Lamborghini Revuelto', 'Lamborghini Revueltos', 608e3],
   ['Tesla Model Y', 'Tesla Model Ys', 45e3], ['iPhone 17 Pro', 'iPhone 17 Pros', 1099],
+  ['Big Mac', 'Big Macs', 6.12], FREDDO_BAR,
 ];
 var CLOSEST_RATIO = 0.25, FURTHEST_RATIO = 10;
 function shortMoney(value) {
   var scaled = function (amount, suffix) { return '$' + (amount >= 10 ? numberFormat.format(Math.round(amount)) : amount.toFixed(1)) + suffix; };
+  if (value >= 1e12) return scaled(value / 1e12, 'tn');
   if (value >= 1e9) return scaled(value / 1e9, 'bn');
   if (value >= 1e6) return scaled(value / 1e6, 'm');
   if (value >= 1e4) return '$' + numberFormat.format(Math.round(value / 1e3)) + 'k';
@@ -605,14 +610,17 @@ function inWords(count) {
   return numberFormat.format(Math.round(count));
 }
 function howMany(ratio, item) {
-  var article = /^[AEIOU]/.test(item[0]) ? 'an ' : 'a ';
+  var article = /^(?:[AEIOaeio]|[Uu][a-z])/.test(item[0]) ? 'an ' : 'a ';
   if (ratio < 0.3) return 'a quarter of ' + article + item[0];
   if (ratio < 0.4) return 'a third of ' + article + item[0];
   if (ratio < 0.6) return 'half ' + article + item[0];
   if (ratio < 0.85) return 'three-quarters of ' + article + item[0];
   if (ratio < 1.3) return 'one ' + item[0];
   if (ratio < 1.75) return 'one and a half ' + item[1];
-  return numberFormat.format(Math.round(ratio)) + ' ' + item[1];
+  return (ratio >= 1e6 ? inWords(ratio) : numberFormat.format(Math.round(ratio))) + ' ' + item[1];
+}
+function withPrice(ratio, item) {
+  return howMany(ratio, item) + ' (' + (item[3] || shortMoney(item[2])) + (ratio >= 1.3 ? ' each' : '') + ')';
 }
 function inElonMusks(value) {
   var ratio = value / ELON_MUSK[2];
@@ -625,10 +633,12 @@ function inBillionaires(value) {
   var nearest = COMPARISON_LADDER
     .map(function (item) { return { item: item, ratio: value / item[2] }; })
     .filter(function (match) { return match.ratio >= CLOSEST_RATIO && match.ratio <= FURTHEST_RATIO; })
-    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); })[0];
-  var phrases = [];
-  if (nearest) phrases.push(howMany(nearest.ratio, nearest.item) + ' (' + shortMoney(nearest.item[2]) + (nearest.ratio >= 1.3 ? ' each' : '') + ')');
-  phrases.push(inWords(value / FREDDO_BAR[2]) + ' Freddo bars (30p each)');
+    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); })
+    .slice(0, 2);
+  var phrases = nearest.map(function (match) { return withPrice(match.ratio, match.item); });
+  if (phrases.length < 2 && !nearest.some(function (match) { return match.item === FREDDO_BAR; })) {
+    phrases.push(withPrice(value / FREDDO_BAR[2], FREDDO_BAR));
+  }
   return { text: "That's about " + phrases.join(', ') + ' or ' + inElonMusks(value) + '.' };
 }
 function perHead(value) {
