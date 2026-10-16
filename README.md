@@ -4,7 +4,7 @@ Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude op
 
 Choose a radius from 3 to 100 km and click the map to see the population, GDP and GDP per head inside the circle, anywhere in the world. Population mode also counts bus, tram, metro and train stops; `mode=gdp` selects GDP. It is live at https://moneymap.jjpcodes.com and extends Tom Forth's [Population around a point](https://www.tomforth.co.uk/circlepopulations/).
 
-[How the numbers are calculated](docs/methodology.md).
+[How the numbers are calculated](docs/methodology.md). US county GDP is split by BEA industry and spread by that industry's LODES workplace jobs, weighted by high-pay share. Other countries retain their existing rule.
 
 ## How it works
 
@@ -25,7 +25,8 @@ sources/                  External data, extracted to the grid
   regional_gdp.py         Kummu admin-1 and official BEA, ONS, CBS and Eurostat GDP
   overture_places.sql     Workplace places per cell
   overture_stops.sql      Transit stops per cell
-  lodes_jobs.py           US workplace jobs per cell
+  lodes_jobs.py           US jobs and industry high-pay weights per cell
+  us_industry_gdp.py      BEA industry shares and suppressed county values
 checks/                   Evidence that the numbers are right
   holdouts.py             Scores the GDP rule against official figures held out
   circles.py              Compares the real Worker's answers with the grids
@@ -44,6 +45,7 @@ data/                     Inputs and outputs; local only, not in git
 Tools come from `devenv.nix`; run commands from the repository root. Download these inputs first:
 
 - `data/raw/kummu/rast_gdpTot_1990_2024_30arcsec.tif` and Kummu's admin-1 GeoPackage in `data/raw/research-gdp/`.
+- BEA CAGDP2 2024 CSV in `data/raw/research-gdp/cagdp2/`; LODES `S000_JT00`, `S000_JT02` and crosswalk files in `data/raw/lodes/`. `sources.lodes_jobs` builds the industry grid from these pinned releases.
 - `data/raw/ghspop/GHS_POP_E2025_GLOBE_R2023A_4326_30ss_V1_0.zip`.
 - GHSL non-residential volume and surface (`nres_v_30ss.zip`, `nres_s_30ss.zip`) and the official GDP tables and boundaries in `data/raw/research-gdp/`, as listed in [the research](docs/gdp-method-research.md). The loader fetches missing Scotland and Northern Ireland boundaries, GISCO NUTS boundaries and the CBS table.
 
@@ -66,7 +68,7 @@ Builders write `data/layers/<layer>/<tile row>/<tile column>.bin` and reports in
 
 - [Kummu et al. (2025)](https://doi.org/10.1038/s41597-025-04487-x), [13 March 2026 release](https://zenodo.org/records/18429133), CC BY 4.0: band 8, `gdp_2024`, of `rast_gdpTot_1990_2024_30arcsec.tif`, and reported admin-1 polygons. The release specifies 2021 international dollars; the embedded 2017 unit tag is stale.
 - [GHSL](https://human-settlement.emergency.copernicus.eu/): GHS-POP R2023A population, GHS-BUILT-V and GHS-BUILT-S R2023A non-residential volume and surface, all 2025, WGS84, 30 arc-seconds, CC BY 4.0.
-- [BEA CAGDP1](https://apps.bea.gov/regional/zip/CAGDP1.zip), county GDP 2024; [US Census](https://www2.census.gov/geo/tiger/GENZ2024/shp/), county boundaries 2024. US government data.
+- BEA [CAGDP1](https://apps.bea.gov/regional/zip/CAGDP1.zip), county GDP 2024, and [CAGDP2](https://apps.bea.gov/regional/zip/CAGDP2.zip), county and state GDP by industry 2024; [US Census](https://www2.census.gov/geo/tiger/GENZ2024/shp/), county boundaries 2024. US government data.
 - [US Census Bureau, LEHD Origin-Destination Employment Statistics (LODES8)](https://lehd.ces.census.gov/data/lodes/LODES8/), workplace jobs and block internal points, public domain.
 - [ONS small-area GVA 2023](https://www.ons.gov.uk/economy/grossvalueaddedgva/datasets/uksmallareagvaestimates); ONS 2011 LSOA boundaries, [Scottish data zones](https://maps.gov.scot/ATOM/shapefiles/SG_DataZoneBdry_2011.zip), [Northern Ireland SOAs](https://www.nisra.gov.uk/files/nisra/publications/SOA2011_Esri_Shapefile_0.zip). Open Government Licence.
 - [Eurostat regional GDP](https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10r_3gdp?unit=MIO_EUR&time=2023) and [GISCO NUTS 2024 boundaries](https://gisco-services.ec.europa.eu/distribution/v2/nuts/), Eurostat reuse terms.

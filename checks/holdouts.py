@@ -7,7 +7,9 @@ result with the official figures of the finer units inside it.
 
 Workplace places: four tests, with and without the places term, on the
 per-unit sums that research/gdp/places_eval.py computed.
-US jobs: state GDP spread to BEA counties with each candidate job weight, on
+US industries: state CAGDP2 industry shares spread by the production industry
+weights, compared with the previous high-pay-job rule.
+US jobs: the earlier four-candidate test of state GDP spread to counties, on
 the per-county sums that the GDP build recorded. Also reports how many jobs
 the cell-centre rule places in a different county from their census block.
 
@@ -24,10 +26,11 @@ import pyarrow.parquet as parquet
 import rasterio
 from rasterio.windows import Window
 
-from layers.gdp.allocation import JOB_WEIGHTS, US_JOB_WEIGHT, Weights, allocate, uses_workplace_places
+from layers.gdp.allocation import JOB_WEIGHTS, US_JOB_WEIGHT, Weights, allocate, allocate_industries, uses_workplace_places
 from layers.gdp.build import GDP_BUILD_DIRECTORY, WORKPLACE_PLACES
 from layers.grid import ROOT
-from sources.lodes_jobs import RELEASES, read_workplace_blocks
+from sources.lodes_jobs import INDUSTRY_JOBS_PER_CELL, RELEASES, read_workplace_blocks
+from sources.us_industry_gdp import INDUSTRIES, state_industry_shares
 from sources.regional_gdp import US_COMBINED_COUNTIES
 
 RESEARCH_SUMS = ROOT / 'data/experiments/places'
@@ -121,8 +124,61 @@ def us_jobs_test(units):
         results[JOB_WEIGHT_NAMES[job_weight]] = scores(predicted, official)
     best = min(results, key=lambda name: results[name]['misallocated_share'])
     return dict(name='US county within state, BEA 2024', counties=len(counties), states=len(states),
-                weights=results, best_weight=best, production_weight=US_JOB_WEIGHT,
+                weights=results, best_weight=best, selected_pre_industry_weight=US_JOB_WEIGHT,
                 counties_without_high_pay_jobs=[unit['code'] for unit in counties if not unit['high_pay_jobs']])
+
+
+US_BENCHMARK_AREAS = {
+    'Bay Area (9 counties)': ['06001', '06013', '06041', '06055', '06075', '06081', '06085', '06095', '06097'],
+    'Seattle (King, Pierce, Snohomish)': ['53033', '53053', '53061'],
+    'New York City (5 boroughs)': ['36005', '36047', '36061', '36081', '36085'],
+}
+
+
+def us_industry_test(units):
+    counties = [unit for unit in units if unit['country'] == 'USA']
+    control_ids = np.array([index for index, unit in enumerate(units, 1) if unit['country'] == 'USA'])
+    official = np.array([unit['official'] for unit in counties])
+    states, state_ids = np.unique([unit['code'][:2] for unit in counties], return_inverse=True)
+    labels = state_ids + 1
+    table = parquet.read_table(INDUSTRY_JOBS_PER_CELL,
+                              columns=['grid_row', 'grid_col', 'high_pay_jobs', *[name + '_hp' for name in INDUSTRIES]])
+    with rasterio.open(GDP_BUILD_DIRECTORY / 'control-ids.tif') as ownership:
+        owners = control_ids_for_cells(ownership, table['grid_row'].to_numpy(), table['grid_col'].to_numpy())
+
+    def county_sums(column):
+        return np.bincount(owners, weights=table[column].to_numpy(), minlength=len(units) + 1)[control_ids]
+
+    high_pay = county_sums('high_pay_jobs')
+    industry_weights = np.column_stack([county_sums(name + '_hp') for name in INDUSTRIES])
+    state_totals = np.bincount(labels, weights=official, minlength=len(states) + 1)
+    state_high_pay = np.bincount(labels, weights=high_pay, minlength=len(states) + 1)
+    state_industry_weights = np.zeros((len(states) + 1, len(INDUSTRIES)))
+    np.add.at(state_industry_weights, labels, industry_weights)
+    industry_targets = np.zeros_like(state_industry_weights)
+    industry_targets[1:] = state_industry_shares(states) * state_totals[1:, None]
+    zeros = np.zeros(len(counties))
+    county_weights = Weights(population=zeros, building_q=zeros, workplace_places=zeros,
+                             all_jobs=zeros, high_pay_jobs=high_pay)
+    predictions = {
+        'high_pay_jobs': allocate(county_weights, labels, state_totals,
+                                  group_sums(labels, county_weights, len(states)), job_weight='high_pay_jobs'),
+        'industry_high_pay_jobs': allocate_industries(labels, industry_weights, high_pay, industry_targets,
+                                                     state_industry_weights, state_high_pay),
+    }
+    for predicted in predictions.values():
+        np.testing.assert_allclose(np.bincount(labels, weights=predicted), state_totals, rtol=8e-8, atol=.01)
+    county_positions = {unit['code']: index for index, unit in enumerate(counties)}
+    report = dict(name='US county within state, BEA CAGDP2 2024 industry shares',
+                  counties=len(counties), states=len(states),
+                  production_weight='industry_high_pay_jobs',
+                  overall={name: scores(predicted, official) for name, predicted in predictions.items()}, areas={})
+    for area, codes in US_BENCHMARK_AREAS.items():
+        positions = [county_positions[code] for code in codes]
+        report['areas'][area] = {name: scores(predicted[positions], official[positions])
+                                 for name, predicted in predictions.items()}
+    report['industry_gdp_without_jobs'] = float(industry_targets[state_industry_weights <= 0].sum())
+    return report
 
 
 def control_ids_for_cells(dataset, rows, columns):
@@ -161,12 +217,11 @@ def us_job_county_mapping(units):
 def main():
     units = json.loads((GDP_BUILD_DIRECTORY / 'conservation.json').read_text())['units']
     report = dict(workplace_places=workplace_places_tests(), us_jobs=us_jobs_test(units),
+                  us_industries=us_industry_test(units),
                   us_job_county_mapping=us_job_county_mapping(units))
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2), flush=True)
-    if report['us_jobs']['best_weight'] != report['us_jobs']['production_weight']:
-        print(f"The best US job weight is now {report['us_jobs']['best_weight']}, not the production {US_JOB_WEIGHT}.")
 
 
 if __name__ == '__main__':

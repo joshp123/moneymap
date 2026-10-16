@@ -17,7 +17,8 @@ import json
 import numpy as np
 import rasterio
 
-from layers.gdp.allocation import US_JOB_WEIGHT, Weights, allocate, uses_job_weight, uses_workplace_places
+from layers.gdp.allocation import (US_INDUSTRY_WEIGHT, US_JOB_WEIGHT, IndustryAllocation,
+                                   Weights, allocate, uses_job_weight, uses_workplace_places)
 from layers.gdp.building_weight import (building_weight_q, check_built_grid_alignment,
                                         open_nonresidential_volume_and_surface)
 from layers.gdp.cell_ownership import CellOwnership, sum_by_unit
@@ -25,6 +26,8 @@ from layers.grid import (BUILD_DIRECTORY, GRID_HEIGHT, GRID_WIDTH, KUMMU_GDP_202
                          SparseCellCounts, layer_tile_total, open_kummu_gdp_and_population, raster_profile,
                          read_window_zero_filled, require_empty_layer_directory, tile_row_strips, write_layer_tiles)
 from sources.regional_gdp import load_kummu_reported_controls, load_official_controls
+from sources.lodes_jobs import INDUSTRY_JOBS_PER_CELL
+from sources.us_industry_gdp import INDUSTRIES, county_industry_gdp, read_cagdp2, suppression_summary
 
 GDP_BUILD_DIRECTORY = BUILD_DIRECTORY / 'gdp'
 WORKPLACE_PLACES = ROOT / 'data/raw/overture/places_per_cell.parquet'
@@ -45,12 +48,37 @@ def weight_name(unit_sums, total, index, uses_jobs, uses_places, centroid):
     if centroid:
         return 'centroid cell'
     if uses_jobs:
-        return US_JOB_WEIGHT
+        return US_INDUSTRY_WEIGHT
     if uses_places:
         return 'population, buildings and workplace places'
     if unit_sums.population[index] and unit_sums.building_q[index]:
         return 'population and buildings'
     return 'population' if unit_sums.population[index] else 'buildings'
+
+
+def us_industry_allocation(units, totals, cells, labels, high_pay_sums):
+    """Split county targets by BEA industry, then prepare their sparse cell allocation."""
+    count = len(units)
+    industry_count = len(INDUSTRIES)
+    job_sums = np.column_stack([sum_by_unit(labels, values, count)
+                                for values in cells.values[:industry_count]])
+    weighted_sums = np.column_stack([sum_by_unit(labels, values, count)
+                                     for values in cells.values[industry_count:2*industry_count]])
+    county_ids = np.array([i for i, unit in enumerate(units, 1) if unit.country == 'USA'])
+    county_codes = [units[i-1].code for i in county_ids]
+    areas = read_cagdp2()
+    county_gdp, suppressed_gdp = county_industry_gdp(county_codes, job_sums[county_ids], areas)
+    np.testing.assert_allclose(county_gdp.sum(axis=1), [units[i-1].value for i in county_ids], rtol=1e-12)
+    targets = np.zeros_like(job_sums)
+    targets[county_ids] = county_gdp * (totals[county_ids] / county_gdp.sum(axis=1))[:, None]
+    allocation = IndustryAllocation(cells.rows, cells.columns, labels,
+                                     np.column_stack(cells.values[industry_count:2*industry_count]),
+                                     cells.values[-1], targets, weighted_sums, high_pay_sums)
+    return allocation, dict(**suppression_summary(areas, county_codes),
+                            suppressed_gdp_estimated=suppressed_gdp,
+                            official_us_gdp=float(county_gdp.sum()),
+                            jobless_industry_gdp=allocation.jobless_industry_gdp,
+                            jobless_industry_gdp_share=float(allocation.jobless_industry_gdp/totals[county_ids].sum()))
 
 
 def build():
@@ -75,6 +103,9 @@ def build():
         offset = check_built_grid_alignment(gdp, volume, surface)
         places = SparseCellCounts(WORKPLACE_PLACES, ['workplace_places'])
         jobs = SparseCellCounts(WORKPLACE_JOBS, ['all_jobs', 'high_pay_jobs'])
+        industry_jobs = SparseCellCounts(INDUSTRY_JOBS_PER_CELL,
+                                         [*INDUSTRIES, *(name+'_hp' for name in INDUSTRIES), 'high_pay_jobs'])
+        industry_labels = np.zeros(len(industry_jobs.rows), dtype='uint32')
         labels_file = GDP_BUILD_DIRECTORY / 'control-ids.tif'
         with rasterio.open(labels_file, 'w', **raster_profile(gdp, 'uint32')) as labels_output:
             for window in tile_row_strips():
@@ -83,6 +114,9 @@ def build():
                 occupied = (cells.population > 0) | (kummu_gdp > 0) | (cells.building_q > 0)
                 kummu_ids, country_ids, labels = ownership.assign(window, gdp.transform, occupied)
                 labels_output.write(labels, 1, window=window)
+                start, end = np.searchsorted(industry_jobs.rows, [window.row_off, window.row_off+window.height])
+                industry_labels[start:end] = labels[industry_jobs.rows[start:end]-int(window.row_off),
+                                                     industry_jobs.columns[start:end]]
                 country_totals += sum_by_unit(country_ids, kummu_gdp, len(countries))
                 kummu_unit_totals += sum_by_unit(kummu_ids, kummu_gdp, len(kummu_units))
                 for name in ('population', 'building_q', 'workplace_places', 'all_jobs', 'high_pay_jobs'):
@@ -100,6 +134,8 @@ def build():
         totals = np.array([0] + [country_totals[country_number[unit.country]] * unit.value / official_sums[unit.country]
                                  if unit.country in official_sums else kummu_by_code[unit.code] for unit in units])
         totals[0] = 0
+        industry_allocation, industry_report = us_industry_allocation(units, totals, industry_jobs,
+                                                                      industry_labels, unit_sums.high_pay_jobs)
         uses_jobs = uses_job_weight(unit_sums, US_JOB_WEIGHT)
         # A unit with no weight in any cell, often too small to contain a cell centre, goes to its centroid cell.
         centroid_cells = defaultdict(list)
@@ -119,6 +155,7 @@ def build():
                 labels = labels_source.read(1, window=window)
                 cells = cell_weights(population, volume, surface, gdp, places, jobs, window)
                 values = allocate(cells, labels, totals, unit_sums)
+                industry_allocation.apply(values, labels, window)
                 built_unit_totals += sum_by_unit(labels, values, unit_count)
                 for unit_id, row, col in centroid_cells[int(window.row_off)]:
                     values[row - int(window.row_off), col] += np.float32(totals[unit_id])
@@ -140,7 +177,8 @@ def build():
         tiles=dict(count=tile_count, bytes=tile_count * TILE_SIZE * TILE_SIZE * 4),
         max_unit_relative_error=float(np.max(np.abs(built_unit_totals[with_gdp] / totals[with_gdp] - 1))),
         max_country_relative_error=float(np.max(np.abs(built_countries[1:][country_totals[1:] > 0] / country_totals[1:][country_totals[1:] > 0] - 1))),
-        us_job_weight=US_JOB_WEIGHT, us_units=int(is_us_unit.sum()), us_units_using_jobs=int(uses_jobs.sum()),
+        us_job_weight=US_INDUSTRY_WEIGHT, us_industries=industry_report,
+        us_units=int(is_us_unit.sum()), us_units_using_jobs=int(uses_jobs.sum()),
         jobs_in_grid=jobs.totals, jobs_outside_us_units=jobs_outside_us_units,
         places_units=int(uses_places.sum()), places_gdp=float(totals[uses_places].sum()),
         places_gdp_share=float(totals[uses_places].sum() / totals.sum()),

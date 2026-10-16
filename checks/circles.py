@@ -8,13 +8,15 @@ these reads a tile, so the check covers the tiles, their upload and the Worker.
 
 Start the preview first (node deploy/preview.mjs), or pass --origin for the
 live Site. To see what a method change does, keep data/checks/circles.json
-from before the change and compare.
+from before the change and pass it with --compare. Campus radii below the
+API minimum use the corresponding cumulative row from a 3 km query.
 
     devenv shell -- python -m checks.circles
 """
 import argparse
 import json
 import math
+from pathlib import Path
 import time
 import urllib.parse
 import urllib.request
@@ -41,6 +43,11 @@ CIRCLES = [
     ('San Francisco', 37.7749, -122.4194, 10), ('Cupertino', 37.3349, -122.0090, 5),
     ('Menlo Park', 37.4848, -122.1484, 5), ('Santa Clara', 37.3707, -121.9638, 5),
     ('Seattle South Lake Union', 47.6223, -122.3365, 3), ('Redmond', 47.6423, -122.1368, 5),
+    ('Apple Park', 37.3349, -122.0090, 1), ('Meta, Menlo Park', 37.4848, -122.1484, 1),
+    ('Googleplex', 37.4220, -122.0841, 2), ('Googleplex', 37.4220, -122.0841, 3),
+    ('Nvidia, Santa Clara', 37.3707, -121.9638, 1), ('Nvidia, Santa Clara', 37.3707, -121.9638, 2),
+    ('Microsoft, Redmond', 47.6423, -122.1368, 1), ('Microsoft, Redmond', 47.6423, -122.1368, 3),
+    ('Amazon, South Lake Union', 47.6223, -122.3365, 2),
 ]
 # Bus, tram and rail stops from Tom Forth's tool, for comparison only.
 TOM_FORTH_STOPS = {'Amsterdam': [696, 345, 33], 'Rotterdam': [11622, 1036, 180]}
@@ -96,25 +103,41 @@ def assert_matches(actual, expected, where):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--origin', default='http://127.0.0.1:8787')
+    parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare GDP, population and stops')
     arguments = parser.parse_args()
+    baseline = {}
+    if arguments.compare:
+        baseline = {(circle['name'], circle['radius_km']): circle
+                    for circle in json.loads(arguments.compare.read_text())['circles']}
     stops = SparseCellCounts(STOPS_PER_CELL, STOP_LAYERS)
     report = {'origin': arguments.origin, 'circles': [], 'timings': []}
     kummu_gdp, population = open_kummu_gdp_and_population()
     with kummu_gdp, population, rasterio.open(GDP_BUILD_DIRECTORY / 'gdp.tif') as gdp:
         for name, latitude, longitude, radius in CIRCLES:
-            result, milliseconds = query(arguments.origin, latitude, longitude, radius)
-            window, distances = cell_distances_km(gdp, latitude, longitude, radius)
+            query_radius = max(3, radius)
+            result, milliseconds = query(arguments.origin, latitude, longitude, query_radius)
+            window, distances = cell_distances_km(gdp, latitude, longitude, query_radius)
             planes = dict(gdp=read_window_zero_filled(gdp, 1, window),
                           population=read_window_zero_filled(population, 1, window),
                           **dict(zip(STOP_LAYERS, stops.window(window))))
-            expected_rows, expected_total = expected_circle(planes, distances, radius)
+            expected_rows, expected_total = expected_circle(planes, distances, query_radius)
             assert_matches(result, expected_total, name)
             assert len(result['cumulative']) == len(expected_rows), f'{name}: cumulative row count'
             for row, expected in zip(result['cumulative'], expected_rows):
                 assert_matches(row, expected, f"{name} {row['distance_km']} km")
+            if radius < query_radius:
+                result = next(row for row in result['cumulative'] if row['distance_km'] == radius)
             circle = dict(name=name, latitude=latitude, longitude=longitude, radius_km=radius,
                           **{key: result[key] for key in ('gdp', 'population', 'gdp_per_head', *STOP_LAYERS)},
                           milliseconds=milliseconds)
+            if (name, radius) in baseline:
+                previous = baseline[(name, radius)]
+                circle['previous_gdp'] = previous['gdp']
+                circle['gdp_change'] = result['gdp'] - previous['gdp']
+                for field in ('population', *STOP_LAYERS):
+                    if field in previous:
+                        np.testing.assert_allclose(result[field], previous[field], rtol=1e-12, atol=1e-3,
+                                                   err_msg=f'{name} changed {field}')
             if name in TOM_FORTH_STOPS:
                 circle['tom_forth_stops'] = dict(zip(STOP_LAYERS, TOM_FORTH_STOPS[name]))
             report['circles'].append(circle)
