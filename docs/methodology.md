@@ -39,7 +39,7 @@ The site's US total is 1.5% above BEA's official 2024 figure. Land and buildings
 
 **Precision.** The site shows money to one decimal place of a million, billion or trillion, and people to the person. The estimates are far less precise than that.
 
-**Billionaires.** For scale, property value mode also divides the circle's total by the net worth of Elon Musk ($936 billion), Jeff Bezos ($370 billion) and Mark Zuckerberg ($251 billion), as published by Forbes on 1 October 2026.
+**Billionaires.** For scale, property value mode names up to three billionaires whose net worth is nearest the circle's total (between a quarter and ten times it), with a key of what each owns. The ladder runs from Rihanna ($1.0 billion) through Oprah, Steven Spielberg, James Dyson, Peter Thiel, Michael Bloomberg, Bill Gates and Mark Zuckerberg to Elon Musk ($908.5 billion), using each person's Forbes real-time profile on 16 October 2026. The list is in `worker/index.js`.
 
 ## How we tested the numbers
 
