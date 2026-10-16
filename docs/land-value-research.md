@@ -133,3 +133,61 @@ Written by AI on 2026.10.16 by model claude opus 5.5. **[V]** = the agent saw th
 1. **National**: leave-one-country-out over the ~30 official totals. The median and worst errors are the accuracy for countries without official data.
 2. **Within country, held out**: grid BORIS NRW (zone €/m² × zone area) and compare circle totals at 3, 10 and 30 km around Cologne, Düsseldorf, Essen and the rural Sauerland. Compare US county totals built from FHFA tract land prices, and BEA division totals by land use. Check the Tokyo and Osaka land-price gradient against the official price points.
 3. **Pass mark** [I]: no more than 15% of value in the wrong council area or county, and circles of 30 km or more within 10%.
+
+## Fable review
+
+Written by AI on 2026.10.16 by model claude fable 5.1. Independent check of the sections above. Code: `research/land-value/{national_totals,landgrid,holdout_units,holdout_nsw,holdout_japan,holdout_us,holdout_misc,holdout_victoria,grid_nrw,holdout_nrw,summarise}.py`; test data fetched by `fetch_*.py` (subagents); outputs, logs and downloaded test data: `data/experiments/land-value/`. **[V]** = measured by this review. **[I]** = inferred.
+
+### National totals
+
+- Re-derived from the same OECD file [V]: 14 countries report land for the whole economy (AUS, AUT, CAN, CZE, DEU, EST, FIN, FRA, GBR, JPN, KOR, NLD, SVK, SWE). Mexico and Croatia report households only under the "total economy" label and New Zealand reports zero; all three must be dropped, not counted as reporters. The land ÷ GDP ratios above are correct.
+- Households' share of all land, matched years, 14 countries: median 0.60, range 0.31 (Estonia) to 0.84 (Australia) [V]. US check: Fed household land in 2015 was $14.3 trn; BEA researchers put all private US land that year at $24.1 trn (Wentland et al. 2023), a household share of 0.59 [V]. So household ÷ 0.6 is right for the largest household-only country and within about ±30% elsewhere.
+- **The model for non-reporters is wrong.** "GDP per head + big-city share" fits the 14 reporters best (leave-one-out error factor 1.46) but fails out of sample: scored on the 13 household-only countries (scaled by 0.6) it misses by a factor 2.1, and it implies land worth 0.21× GDP in India, 0.33× in Indonesia and 0.8× in China [V]. Independent figures say otherwise: India's 2019 All India Debt and Investment Survey puts land at 69% of rural and 49% of urban household assets, about 1.7× GDP [V, ratio I]; China's national balance sheet (CASS) has household wealth of ¥513 trn in 2019, mostly housing, plus ¥31.5 trn of state-owned construction land, which puts land at roughly 1.5–2.5× GDP [V, ratio I]. GDP per head extrapolates downwards into countries where land is a larger, not smaller, share of wealth.
+- Use the big-city share alone (land ÷ GDP = exp(0.17 + 1.75 × share of people in cities over one million); leave-one-out factor 1.56, out-of-sample factor 1.95 with no bias) or a constant 1.9× GDP (factors 1.75 and 1.91) [V]. Big-city model: China 2.1, India 1.6, Brazil 2.6, Russia 1.8, Indonesia 1.5, Switzerland 1.6.
+- World total: $226 trn (constant) to $238 trn (big-city), 2.0–2.1× world GDP [V]. The $170–230 trn above is too low at the bottom end because it under-values China and India.
+
+### Within-country split: ten held-out tests
+
+Official land-only values that no parameter was fitted on, against fixed cell weights summed over the same units. Score: share of the area's land value placed in the wrong unit (lower is better). All weights are fixed in advance: exponent 0.25, ~40 km density radius, mixes half and half. "GDP layer" is the site's own GDP grid (`data/gdp-v3/gdp.tif`).
+
+| Test | population | pop × density^0.25 | GDP layer | Kummu GDP | ½ pop×density^0.25 + ½ GDP | ½ pop + ½ GDP | built volume |
+|---|---|---|---|---|---|---|---|
+| NSW councils (128), calibration | 16.5% | 15.4% | 20.3% | 17.0% | 16.7% | 17.4% | 26.6% |
+| Japan prefectures (47), fixed-asset tax values 2025 | 19.6% | 14.2% | 14.8% | 14.9% | **12.8%** | 16.8% | 28.5% |
+| Japan municipalities (1,719) | 24.1% | 19.2% | 22.0% | 20.1% | **19.1%** | 22.2% | 34.3% |
+| NRW municipalities (396), Bodenrichtwerte 2026 gridded | 17.4% | 17.8% | 12.9% | **12.2%** | 14.6% | 14.3% | 19.7% |
+| US states (49), Larson 2009 all land | 12.4% | 13.2% | 13.0% | **11.4%** | 12.9% | 12.4% | 15.7% |
+| US counties (2,423), residential land (FHFA share × ACS value) | 35.1% | 30.8% | 29.7% | 30.9% | **28.9%** | 31.0% | 38.8% |
+| Korea regions (17), national balance sheet 2025 | 18.8% | 15.6% | 17.2% | 17.2% | **15.4%** | 16.8% | 31.4% |
+| Korea districts (228), assessed land prices 2025 | 24.2% | 23.0% | 22.5% | 27.2% | **21.8%** | 22.4% | 30.0% |
+| British Columbia municipalities (160), 2026 roll | 17.4% | **10.7%** | 15.6% | 11.5% | 11.9% | 15.6% | 19.9% |
+| Denmark municipalities (98), taxable land value 2025 | 16.1% | **13.5%** | 17.2% | 16.1% | 14.7% | 15.4% | 24.1% |
+| Victoria councils (78), site value 2026 | 17.1% | 17.7% | 23.6% | **16.7%** | 19.2% | 18.8% | 19.7% |
+| **Mean, ten held-out tests** | 20.2% | 17.6% | 18.9% | 17.8% | **17.1%** | 18.6% | 26.2% |
+
+- The density term (pop × density^0.25) survives held-out testing: it beats plain population in eight of ten tests, by 3–7 points in Japan, Korea, BC and Denmark. It fails in NRW, where Düsseldorf and Cologne (2–2.5× under-predicted) and the Ruhr cities (2.5× over-predicted) have the same density but very different prices, so the GDP layer, which carries official regional GDP, does best there; and it is a point worse than population in Victoria, where it starves the wheat-belt councils [V].
+- The half-and-half mix with the GDP layer is best in five tests and within 2.5 points of best in all ten; no single weight is that consistent [V]. Its weak spot is Australia, where the site's GDP layer has no official sub-state control and spreads state GDP by population and building volume (Victoria 23.6%). The exponent is not sharp: 0.35 does slightly better than 0.25 in seven tests, worse in NRW, the US states and Victoria; the range 0.15–0.5 moves scores by one or two points [V].
+- Building volume, building surface and the non-residential term lose everywhere, by 3 to 20 points: land value is about price, not how much is built [V].
+- **Farmland needs no term.** A cropland term (SPAM 2020 area, national farm share 2–12%) never improved a test. A plain area term helps only in the two Australian states, by 1–2 points (broadacre farming, few people); elsewhere it moves scores by at most a point either way [V]. In NSW's 71 regional councils, land value per km² rises as population density^0.8 and cropland share adds nothing once density is known: productive farmland carries more people [V]. Drop step 2 of the method above.
+
+### Circle scale, NRW
+
+Model ÷ official circle totals, twelve centres (eight cities, four rural), both normalised to the state total. Median absolute log error by radius [V]:
+
+| Radius | population | GDP layer | ½ pop×density^0.25 + ½ GDP |
+|---|---|---|---|
+| 3 km | 0.54 | 0.34 | 0.38 |
+| 5 km | 0.52 | 0.26 | 0.35 |
+| 10 km | 0.35 | 0.33 | 0.34 |
+| 20 km | 0.32 | 0.34 | 0.32 |
+| 30 km | 0.26 | 0.27 | 0.27 |
+| 50 km | 0.23 | 0.27 | 0.23 |
+
+A log error of 0.35 is a factor 1.4. City centres are the hard case: 3 km around Cologne cathedral holds €65 bn of land by the official values; population puts 0.36× that there, the mix 0.60×. Düsseldorf is 0.37× even with the mix. Rural circles land within 0.8–1.6× at 10–30 km [V].
+
+### Recommended method
+
+1. **National totals** as above, with two changes: drop Mexico, Croatia and New Zealand from the reporters; replace the non-reporter model with the big-city-share model (or a constant 1.9× GDP). Household-only countries ÷ 0.6.
+2. **Within each country**, cell weight = ½ × cell share of population × (population density within ~40 km)^0.25 + ½ × cell share of the site's GDP layer. Two inputs the site already has; one fixed exponent; no farmland step, no non-residential step. The density field is smooth, so compute it on a 5 arc-minute grid and interpolate [I].
+3. **Accuracy to expect** [V]: 13–22% of a country's land value in the wrong municipality or district; 10 km circles within a factor 1.4 in the median; 30–50 km circles within 1.3. City-centre circles in rich cities read low by up to 2×; non-reporting countries carry a further factor of about 1.6–1.9 on the total.
+4. What the model cannot see: regional price levels at equal density (Düsseldorf against Gelsenkirchen, Aspen, Nantucket, mining towns) and resort land. Only official valuations would fix that, and they exist for a handful of countries.
