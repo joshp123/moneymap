@@ -6,11 +6,11 @@ import { fileURLToPath } from 'node:url';
 import worker from '../worker/index.js';
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const tilesDirectory = resolve(projectDirectory, 'data');
+const dataDirectory = resolve(projectDirectory, 'data');
 const port = Number(process.env.PORT || 8787);
 function tilePath(key) {
-  if (!/^tiles\/\d+\/\d+\.bin$/.test(key)) throw new Error('Invalid tile key');
-  return resolve(tilesDirectory, key);
+  if (!/^layers\/(gdp|population)\/\d+\/\d+\.bin$/.test(key)) throw new Error('Invalid tile key');
+  return resolve(dataDirectory, key);
 }
 const env = {
   UPLOAD_TOKEN: process.env.UPLOAD_TOKEN,

@@ -7,7 +7,7 @@ const GRID = {
 const EARTH_RADIUS_KM = 6371.0088;
 const RADIANS = Math.PI / 180;
 const TILE_CELLS = GRID.tileSize ** 2;
-const TILE_BYTES = TILE_CELLS * 8;
+const TILE_BYTES = TILE_CELLS * 4;
 
 function circleParameters(searchParams) {
   const values = ['lat', 'long', 'distance_km'].map(name => {
@@ -47,11 +47,15 @@ async function circle(bucket, { latitude, longitude, radius }) {
   }
   for (let batchStart = 0; batchStart < tileCoordinates.length; batchStart += 16) {
     await Promise.all(tileCoordinates.slice(batchStart, batchStart + 16).map(async ([tileRow, tileColumn]) => {
-      const object = await bucket.get(`tiles/${tileRow}/${tileColumn}.bin`);
-      if (!object) return;
-      const bytes = await object.arrayBuffer();
-      if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${tileRow}/${tileColumn}`);
-      const values = new DataView(bytes);
+      const layers = await Promise.all(['gdp', 'population'].map(async layer => {
+        const object = await bucket.get(`layers/${layer}/${tileRow}/${tileColumn}.bin`);
+        if (!object) return null;
+        const bytes = await object.arrayBuffer();
+        if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${layer}/${tileRow}/${tileColumn}`);
+        return new DataView(bytes);
+      }));
+      const [gdpValues, populationValues] = layers;
+      if (!gdpValues && !populationValues) return;
       const rowStart = tileRow * GRID.tileSize;
       const columnStart = tileColumn * GRID.tileSize;
       for (let row = Math.max(firstRow, rowStart); row <= Math.min(lastRow, rowStart + GRID.tileSize - 1); row++) {
@@ -60,8 +64,8 @@ async function circle(bucket, { latitude, longitude, radius }) {
         const cosineProduct = Math.cos(latitudeRadians) * Math.cos(cellLatitude);
         for (let column = Math.max(firstColumn, columnStart); column <= Math.min(lastColumn, columnStart + GRID.tileSize - 1); column++) {
           const cellIndex = (row - rowStart) * GRID.tileSize + column - columnStart;
-          const gdp = values.getFloat32(cellIndex * 4, true);
-          const population = values.getFloat32((TILE_CELLS + cellIndex) * 4, true);
+          const gdp = gdpValues ? gdpValues.getFloat32(cellIndex * 4, true) : 0;
+          const population = populationValues ? populationValues.getFloat32(cellIndex * 4, true) : 0;
           if (gdp === 0 && population === 0) continue;
           const cellLongitude = GRID.west + (column + 0.5) * GRID.pixelWidth;
           const haversine = latitudeDistance + cosineProduct * Math.sin((cellLongitude - longitude) * RADIANS / 2) ** 2;
@@ -89,7 +93,15 @@ async function circle(bucket, { latitude, longitude, radius }) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const upload = /^\/__upload\/(tiles\/(\d+)\/(\d+)\.bin)$/.exec(url.pathname);
+    const oldTile = /^\/__upload\/(tiles\/\d+\/\d+\.bin)$/.exec(url.pathname);
+    if (oldTile && request.method === 'DELETE') {
+      if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) {
+        return new Response('Not found', { status: 404 });
+      }
+      await env.TILES.delete(oldTile[1]);
+      return new Response(null, { status: 204 });
+    }
+    const upload = /^\/__upload\/(layers\/(?:gdp|population)\/(\d+)\/(\d+)\.bin)$/.exec(url.pathname);
     if (upload && (request.method === 'PUT' || request.method === 'HEAD')) {
       if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) {
         return new Response('Not found', { status: 404 });
@@ -332,6 +344,7 @@ const page = `<!doctype html>
 <h2>Sources and credits</h2>
 <p>Based on <a href="https://www.tomforth.co.uk/circlepopulations/">Tom Forth's Population around a point tool and page</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>GDP, 2024: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">March 2026 release</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
+<p>Regional GDP: <a href="https://www.bea.gov/data/gdp/gdp-county-metro-and-other-areas">BEA (2024)</a>, <a href="https://www.ons.gov.uk/economy/grossdomesticproductgdp">ONS (2023)</a>, <a href="https://ec.europa.eu/eurostat/web/regions/database">Eurostat (2023)</a> and <a href="https://www.cbs.nl/en-gb/figures">CBS (2023)</a>. Built-up volume and surface, 2025: GHSL <a href="https://ghsl.jrc.ec.europa.eu/ghs_buV2023.php">GHS-BUILT-V</a> and <a href="https://ghsl.jrc.ec.europa.eu/ghs_buS2023.php">GHS-BUILT-S</a> R2023A, European Commission Joint Research Centre (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Population, 2025: <a href="https://ghsl.jrc.ec.europa.eu/ghs_pop2023.php">GHS-POP R2023A, European Commission Joint Research Centre</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
 <script>

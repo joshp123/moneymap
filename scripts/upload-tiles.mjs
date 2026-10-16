@@ -1,16 +1,19 @@
 // Written by AI on 2026.10.16 by model gpt-6.1-sol.
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
+const deleteOldTiles = process.argv.includes('--delete-old');
 const origin = new URL(process.argv[2]);
 if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('Expected an HTTP origin');
-const root = resolve('data/tiles');
+const root = resolve(deleteOldTiles ? 'data/tiles' : 'data/layers');
 const paths = [];
-for (const row of await readdir(root)) {
-  if (!/^\d+$/.test(row)) continue;
-  for (const col of await readdir(join(root, row))) {
-    if (/^\d+\.bin$/.test(col)) paths.push(`${row}/${col}`);
+for (const layer of deleteOldTiles ? [''] : ['population', 'gdp']) {
+  for (const row of await readdir(join(root, layer))) {
+    if (!/^\d+$/.test(row)) continue;
+    for (const col of await readdir(join(root, layer, row))) {
+      if (/^\d+\.bin$/.test(col)) paths.push(layer ? `${layer}/${row}/${col}` : `${row}/${col}`);
+    }
   }
 }
 console.log('Enter one credentials JSON line on hidden stdin.');
@@ -43,15 +46,15 @@ async function credentialsLine() {
 let credentials;
 try { credentials = JSON.parse(await credentialsLine()); }
 catch { throw new Error('Could not read credentials JSON from stdin'); }
-if (!credentials?.uploadToken || !credentials?.siteAccessToken) throw new Error('Both uploadToken and siteAccessToken are required');
+if (!credentials?.uploadToken) throw new Error('uploadToken is required');
 const headers = {
   Authorization: `Bearer ${credentials.uploadToken}`,
-  'OAI-Sites-Authorization': `Bearer ${credentials.siteAccessToken}`,
+  ...(credentials.siteAccessToken ? { 'OAI-Sites-Authorization': `Bearer ${credentials.siteAccessToken}` } : {}),
 };
 async function request(path, method, body) {
   for (let attempt = 0; ; attempt++) {
     try {
-      const response = await fetch(new URL(`/__upload/tiles/${path}`, origin), {
+      const response = await fetch(new URL(`/__upload/${deleteOldTiles ? 'tiles' : 'layers'}/${path}`, origin), {
         method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(30000),
       });
       if (response.status < 500 && response.status !== 429 || attempt === 2) return response;
@@ -60,22 +63,43 @@ async function request(path, method, body) {
     await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
   }
 }
-let next = 0, uploaded = 0, skipped = 0;
-const progress = setInterval(() => console.log(`${uploaded + skipped}/${paths.length}: ${uploaded} uploaded, ${skipped} already present`), 5000);
+let next = 0, uploaded = 0, skipped = 0, deleted = 0, failures = 0, processedBytes = 0;
+const startedAt = Date.now();
+function progressLine() {
+  const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  return `${uploaded + skipped + deleted + failures}/${paths.length} files: ${uploaded} uploaded, ${deleted} deleted, ${skipped} already present, ${failures} failed; ${processedBytes} bytes ${deleteOldTiles ? 'deleted' : 'uploaded'}; ${elapsedSeconds}s`;
+}
+const progress = setInterval(() => console.log(progressLine()), 5000);
 try {
-  await Promise.all(Array.from({ length: 48 }, async () => {
+  await Promise.all(Array.from({ length: 8 }, async () => {
     while (next < paths.length) {
       const path = paths[next++];
-      const existing = await request(path, 'HEAD');
-      if (existing.ok && Number(existing.headers.get('Content-Length')) === 115200) { skipped++; continue; }
-      if (existing.status !== 404) throw new Error(`HEAD ${path}: ${existing.status} or unexpected tile size`);
-      const bytes = await readFile(join(root, path));
-      if (bytes.length !== 115200) throw new Error(`Unexpected tile size: ${path}`);
-      const response = await request(path, 'PUT', bytes);
-      await response.body?.cancel();
-      if (response.status !== 201) throw new Error(`PUT ${path}: ${response.status}`);
-      uploaded++;
+      try {
+        if (deleteOldTiles) {
+          const bytes = (await stat(join(root, path))).size;
+          const response = await request(path, 'DELETE');
+          await response.body?.cancel();
+          if (response.status !== 204) throw new Error(`DELETE ${path}: ${response.status}`);
+          deleted++;
+          processedBytes += bytes;
+          continue;
+        }
+        const existing = await request(path, 'HEAD');
+        if (existing.ok && Number(existing.headers.get('Content-Length')) === 57600) { skipped++; continue; }
+        if (existing.status !== 404) throw new Error(`HEAD ${path}: ${existing.status} or unexpected tile size`);
+        const bytes = await readFile(join(root, path));
+        if (bytes.length !== 57600) throw new Error(`Unexpected tile size: ${path}`);
+        const response = await request(path, 'PUT', bytes);
+        await response.body?.cancel();
+        if (response.status !== 201) throw new Error(`PUT ${path}: ${response.status}`);
+        uploaded++;
+        processedBytes += bytes.length;
+      } catch (error) {
+        failures++;
+        console.error(`${path}: ${error.message}`);
+      }
     }
   }));
-  console.log(`Finished ${paths.length} tiles: ${uploaded} uploaded, ${skipped} already present.`);
+  console.log(`Finished: ${progressLine()}`);
+  if (failures) process.exitCode = 1;
 } finally { clearInterval(progress); }
