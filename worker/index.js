@@ -24,22 +24,27 @@ async function nearestPlace(bucket, latitude, longitude) {
     })().catch(error => { placesPromise = undefined; throw error; });
   }
   const places = await placesPromise;
+  // The best-known nearby place: the largest population divided by distance squared
+  // (distances under 1 km count as 1 km), within 200 km. Bank picks London, not a
+  // small district that happens to be nearer.
   const latitudeRadians = latitude * RADIANS;
   const maximumAngle = 200 / EARTH_RADIUS_KM;
-  let nearest = null;
-  let nearestHaversine = Math.sin(maximumAngle / 2) ** 2;
+  let best = null, bestScore = 0, bestDistance = 0;
   for (const place of places) {
     const placeLatitude = place[2] * RADIANS;
     if (Math.abs(placeLatitude - latitudeRadians) > maximumAngle) continue;
     const haversine = Math.sin((placeLatitude - latitudeRadians) / 2) ** 2 +
       Math.cos(latitudeRadians) * Math.cos(placeLatitude) * Math.sin((place[3] - longitude) * RADIANS / 2) ** 2;
-    if (haversine <= nearestHaversine) {
-      nearest = place;
-      nearestHaversine = haversine;
+    const distance = 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.min(1, haversine)));
+    if (distance > 200) continue;
+    const score = place[4] / Math.max(distance, 1) ** 2;
+    if (score > bestScore) {
+      best = place;
+      bestScore = score;
+      bestDistance = distance;
     }
   }
-  return nearest ? { name: nearest[0], country: nearest[1],
-    distance_km: 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(nearestHaversine)) } : null;
+  return best ? { name: best[0], country: best[1], distance_km: bestDistance } : null;
 }
 
 function circleParameters(searchParams) {
@@ -379,6 +384,14 @@ const page = `<!doctype html>
             color: white;
         }
 
+        .tagline {
+            text-align: center;
+            font-style: italic;
+            font-size: smaller;
+            color: #555;
+            margin: 0.3em;
+        }
+
         .controls {
             text-align: center;
             margin: 0.4em;
@@ -501,6 +514,7 @@ const page = `<!doctype html>
 </head>
 <body>
 <h1 id="heading">Population around a point</h1>
+<p class="tagline">&ldquo;This is the worst website I&rsquo;ve seen in my life.&rdquo; Some guy on Twitter, 2026</p>
 <div class="mode-switch" role="group" aria-label="Display">
 <button type="button" id="populationmode" aria-pressed="true">Population</button>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
@@ -553,53 +567,69 @@ function money(value) {
   if (value >= 1e6) return '$' + Number((value / 1e6).toPrecision(3)) + ' million';
   return '$' + numberFormat.format(value);
 }
-// Forbes real-time net worths on each person's profile page, 16 October 2026.
-// [full name, short name, plural, net worth]
-var BILLIONAIRES = [
-  ['Elon Musk', 'Elon Musk', 'Elon Musks', 908.5e9], ['Jeff Bezos', 'Jeff Bezos', 'Jeff Bezoses', 369.8e9],
-  ['Larry Page', 'Larry Page', 'Larry Pages', 279.3e9], ['Mark Zuckerberg', 'Mark Zuckerberg', 'Mark Zuckerbergs', 243.3e9],
-  ['Jensen Huang', 'Jensen Huang', 'Jensen Huangs', 186e9], ['Warren Buffett', 'Warren Buffett', 'Warren Buffetts', 151.1e9],
-  ['Bill Gates', 'Bill Gates', 'Bill Gateses', 117.7e9], ['Michael Bloomberg', 'Michael Bloomberg', 'Michael Bloombergs', 94.9e9],
-  ['Mukesh Ambani', 'Mukesh Ambani', 'Mukesh Ambanis', 83.4e9], ['Masayoshi Son', 'Masayoshi Son', 'Masayoshi Sons', 60.4e9],
-  ['Peter Thiel', 'Peter Thiel', 'Peter Thiels', 36.4e9], ['Phil Knight', 'Phil Knight', 'Phil Knights', 25.4e9],
-  ['James Dyson', 'James Dyson', 'James Dysons', 14.7e9], ['Steven Spielberg', 'Steven Spielberg', 'Steven Spielbergs', 7.9e9],
-  ['George Lucas', 'George Lucas', 'George Lucases', 5.4e9], ['Michael Jordan', 'Michael Jordan', 'Michael Jordans', 4.7e9],
-  ['Oprah Winfrey', 'Oprah', 'Oprahs', 3.4e9], ['Taylor Swift', 'Taylor Swift', 'Taylor Swifts', 2.0e9],
-  ['Rihanna', 'Rihanna', 'Rihannas', 1.0e9],
+// What the circle could buy, said the way a person would: the nearest comparison on a
+// ladder with at least one rung per order of magnitude, a count of Freddo bars, and Elon.
+// People: Forbes real-time profiles, 16 October 2026. Things: approximate US list prices,
+// 2025-26; Salvator Mundi's 2017 sale price. A Freddo is about 30p ($0.40).
+// [singular, plural, value in US dollars]
+var ELON_MUSK = ['Elon Musk', 'Elon Musks', 908.5e9];
+var FREDDO_BAR = ['Freddo bar', 'Freddo bars', 0.40];
+var COMPARISON_LADDER = [
+  ['Jeff Bezos', 'Jeff Bezoses', 369.8e9], ['Larry Page', 'Larry Pages', 279.3e9],
+  ['Mark Zuckerberg', 'Mark Zuckerbergs', 243.3e9], ['Jensen Huang', 'Jensen Huangs', 186e9],
+  ['Warren Buffett', 'Warren Buffetts', 151.1e9], ['Bill Gates', 'Bill Gateses', 117.7e9],
+  ['Michael Bloomberg', 'Michael Bloombergs', 94.9e9], ['Mukesh Ambani', 'Mukesh Ambanis', 83.4e9],
+  ['Masayoshi Son', 'Masayoshi Sons', 60.4e9], ['Peter Thiel', 'Peter Thiels', 36.4e9],
+  ['Phil Knight', 'Phil Knights', 25.4e9], ['James Dyson', 'James Dysons', 14.7e9],
+  ['Steven Spielberg', 'Steven Spielbergs', 7.9e9], ['George Lucas', 'George Lucases', 5.4e9],
+  ['Michael Jordan', 'Michael Jordans', 4.7e9], ['Oprah', 'Oprahs', 3.4e9],
+  ['Taylor Swift', 'Taylor Swifts', 2.0e9], ['Rihanna', 'Rihannas', 1.0e9],
+  ['Salvator Mundi', 'Salvator Mundis', 450.3e6], ['Gulfstream G700', 'Gulfstream G700s', 78e6],
+  ['Bugatti Tourbillon', 'Bugatti Tourbillons', 4.1e6], ['Lamborghini Revuelto', 'Lamborghini Revueltos', 608e3],
+  ['Tesla Model Y', 'Tesla Model Ys', 45e3], ['iPhone 17 Pro', 'iPhone 17 Pros', 1099],
 ];
 var CLOSEST_RATIO = 0.25, FURTHEST_RATIO = 10;
-function netWorth(billionaire) {
-  var billions = billionaire[3] / 1e9;
-  return ' ($' + (billions >= 10 ? numberFormat.format(Math.round(billions)) : billions.toFixed(1)) + 'bn)';
+function shortMoney(value) {
+  var scaled = function (amount, suffix) { return '$' + (amount >= 10 ? numberFormat.format(Math.round(amount)) : amount.toFixed(1)) + suffix; };
+  if (value >= 1e9) return scaled(value / 1e9, 'bn');
+  if (value >= 1e6) return scaled(value / 1e6, 'm');
+  if (value >= 1e4) return '$' + numberFormat.format(Math.round(value / 1e3)) + 'k';
+  if (value >= 100) return '$' + numberFormat.format(Math.round(value));
+  return '$' + value.toFixed(2);
 }
-function howMany(ratio, billionaire) {
-  return howManyWithoutWorth(ratio, billionaire) + netWorth(billionaire);
+function inWords(count) {
+  var rounded = function (amount) { return String(Number(amount.toPrecision(2))); };
+  if (count >= 1e12) return rounded(count / 1e12) + ' trillion';
+  if (count >= 1e9) return rounded(count / 1e9) + ' billion';
+  if (count >= 1e6) return rounded(count / 1e6) + ' million';
+  return numberFormat.format(Math.round(count));
 }
-function howManyWithoutWorth(ratio, billionaire) {
-  var article = /^[AEIOU]/.test(billionaire[1]) ? 'an ' : 'a ';
-  if (ratio < 0.3) return 'a quarter of ' + article + billionaire[1];
-  if (ratio < 0.4) return 'a third of ' + article + billionaire[1];
-  if (ratio < 0.6) return 'half ' + article + billionaire[1];
-  if (ratio < 0.85) return 'three-quarters of ' + article + billionaire[1];
-  if (ratio < 1.3) return 'one ' + billionaire[1];
-  if (ratio < 1.75) return 'one and a half ' + billionaire[2];
-  return numberFormat.format(Math.round(ratio)) + ' ' + billionaire[2];
+function howMany(ratio, item) {
+  var article = /^[AEIOU]/.test(item[0]) ? 'an ' : 'a ';
+  if (ratio < 0.3) return 'a quarter of ' + article + item[0];
+  if (ratio < 0.4) return 'a third of ' + article + item[0];
+  if (ratio < 0.6) return 'half ' + article + item[0];
+  if (ratio < 0.85) return 'three-quarters of ' + article + item[0];
+  if (ratio < 1.3) return 'one ' + item[0];
+  if (ratio < 1.75) return 'one and a half ' + item[1];
+  return numberFormat.format(Math.round(ratio)) + ' ' + item[1];
 }
-// Up to three billionaires whose wealth is nearest the value, said the way a person would.
+function inElonMusks(value) {
+  var ratio = value / ELON_MUSK[2];
+  var amount = ratio >= CLOSEST_RATIO ? howMany(ratio, ELON_MUSK)
+    : (ratio * 100).toLocaleString('en-GB', { maximumSignificantDigits: 2 }) + '% of an Elon Musk';
+  return amount + ' (' + shortMoney(ELON_MUSK[2]) + ')';
+}
 function inBillionaires(value) {
-  var nearest = BILLIONAIRES
-    .map(function (billionaire) { return { billionaire: billionaire, ratio: value / billionaire[3] }; })
+  if (!(value > 0)) return { text: "That's not even one Freddo bar, or 0% of an Elon Musk." };
+  var nearest = COMPARISON_LADDER
+    .map(function (item) { return { item: item, ratio: value / item[2] }; })
     .filter(function (match) { return match.ratio >= CLOSEST_RATIO && match.ratio <= FURTHEST_RATIO; })
-    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); })
-    .slice(0, 3);
-  if (!nearest.length) {
-    var poorest = BILLIONAIRES[BILLIONAIRES.length - 1], richest = BILLIONAIRES[0];
-    return value < poorest[3] ? { text: "That's less than a quarter of a " + poorest[1] + netWorth(poorest) + '.' }
-      : { text: "That's about " + numberFormat.format(Math.round(value / richest[3])) + ' ' + richest[2] + netWorth(richest) + '.' };
-  }
-  var phrases = nearest.map(function (match) { return howMany(match.ratio, match.billionaire); });
-  var text = "That's about " + (phrases.length > 1 ? phrases.slice(0, -1).join(', ') + ' or ' : '') + phrases[phrases.length - 1] + '.';
-  return { text: text };
+    .sort(function (a, b) { return Math.abs(Math.log(a.ratio)) - Math.abs(Math.log(b.ratio)); })[0];
+  var phrases = [];
+  if (nearest) phrases.push(howMany(nearest.ratio, nearest.item) + ' (' + shortMoney(nearest.item[2]) + (nearest.ratio >= 1.3 ? ' each' : '') + ')');
+  phrases.push(inWords(value / FREDDO_BAR[2]) + ' Freddo bars (30p each)');
+  return { text: "That's about " + phrases.join(', ') + ' or ' + inElonMusks(value) + '.' };
 }
 function perHead(value) {
   return value === null ? '' : '$' + numberFormat.format(value);

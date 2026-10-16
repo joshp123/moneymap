@@ -41,7 +41,7 @@ The site's US total is 1.5% above BEA's official 2024 figure. Land and buildings
 
 **Precision.** The site shows money to one decimal place of a million, billion or trillion, and people to the person. The estimates are far less precise than that.
 
-**Billionaires.** For scale, property value mode names up to three billionaires whose net worth is nearest the circle's total (between a quarter and ten times it), with each person's net worth in brackets. The ladder runs from Rihanna ($1.0 billion) through Oprah, Steven Spielberg, James Dyson, Peter Thiel, Michael Bloomberg, Bill Gates and Mark Zuckerberg to Elon Musk ($908.5 billion), using each person's Forbes real-time profile on 16 October 2026. The list is in `worker/index.js`.
+**What the circle could buy.** For fun, property value mode compares the circle's total with the nearest thing on a ladder with at least one rung per order of magnitude, then counts it in Freddo bars (about 30p each) and as a share of Elon Musk ($908.5 billion). The ladder runs from an iPhone 17 Pro ($1,099), a Tesla Model Y ($45,000), a Lamborghini Revuelto ($608,000), a Bugatti Tourbillon (about $4.1 million), a Gulfstream G700 ($78 million) and Leonardo's Salvator Mundi ($450 million, sold in 2017) up through Rihanna ($1.0 billion), Oprah, Steven Spielberg, James Dyson, Peter Thiel, Michael Bloomberg, Bill Gates and Mark Zuckerberg to Jeff Bezos ($369.8 billion). People's net worths are each Forbes real-time profile on 16 October 2026; object prices are approximate US list prices for 2025 and 2026. The list is in `worker/index.js`.
 
 ## How we tested the numbers
 
