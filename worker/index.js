@@ -225,7 +225,7 @@ const page = `<!doctype html>
             background-color: #183551;
             color: white;
             margin: 0;
-            padding: 0.4em;
+            padding: 0.2em;
         }
 
         h2,
@@ -250,8 +250,7 @@ const page = `<!doctype html>
 
         #bringSitesMapHolder {
             position: relative;
-            height: 520px;
-            max-height: 55vh;
+            height: min(540px, 58vh);
         }
 
         #leftMask {
@@ -304,21 +303,21 @@ const page = `<!doctype html>
 
         #maincounter {
             line-height: 1;
-            margin-top: 0.4em;
-            margin-bottom: 0.4em;
-            font-size: 4em;
+            margin-top: 0.1em;
+            margin-bottom: 0.15em;
+            font-size: 3.6em;
             font-weight: bold;
         }
 
         .mode-switch {
             display: flex;
             justify-content: center;
-            margin: 1em;
+            margin: 0.5em;
         }
 
         .mode-switch button {
-            min-height: 44px;
-            padding: 0.6em 1em;
+            min-height: 38px;
+            padding: 0.35em 0.9em;
             border: 1px solid #183551;
             background: #F0F0F0;
             color: #183551;
@@ -329,6 +328,19 @@ const page = `<!doctype html>
         .mode-switch button[aria-pressed="true"] {
             background: #183551;
             color: white;
+        }
+
+        .controls {
+            text-align: center;
+            margin: 0.4em;
+        }
+
+        .controls input {
+            vertical-align: middle;
+        }
+
+        #resultlabel, #secondarycounter, #stopcounter, #billionairecounter {
+            margin: 0.35em 1em;
         }
 
         #secondarycounter, #stopcounter, #billionairecounter {
@@ -414,9 +426,7 @@ const page = `<!doctype html>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
 <button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p style="text-align:center">Population, GDP and property value within a distance, from any point in the world.</p>
-<p style="text-align:center">Select a radius and click on the map.</p>
-<p style="text-align:center"><input type="range" id="range" min="3" value="5" max="100" step="1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<label for="range" id="rangelabel">5</label> km.</p>
+<p class="controls">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km.</p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
 <p id="resultlabel">Population within circle in 2025:</p>
 <p style="text-align:center" id="maincounter" aria-live="polite">--</p>
