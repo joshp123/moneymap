@@ -123,11 +123,11 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>moneymap: GDP around a point</title>
+<title>moneymap: population around a point</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <style>
-        input {
+        input[type="range"] {
             width: 220px;
             max-width: 80%;
         }
@@ -151,7 +151,8 @@ const page = `<!doctype html>
             margin: 0 auto;
             font-family: sans-serif;
             text-align: center;
-            padding-left: 2px;
+            padding: 0 2px;
+            box-sizing: border-box;
         }
 
         h1 {
@@ -212,8 +213,17 @@ const page = `<!doctype html>
 
         table {
             width: 100%;
+            table-layout: fixed;
             text-align: center;
             border: 1px solid black;
+        }
+
+        th:first-child {
+            width: 15%;
+        }
+
+        th, td {
+            padding: 4px 2px;
         }
 
         th {
@@ -228,12 +238,43 @@ const page = `<!doctype html>
             height: 400px;
         }
 
-        #gdpcounter {
+        #maincounter {
             line-height: 1;
             margin-top: 0.4em;
             margin-bottom: 0.4em;
             font-size: 4em;
             font-weight: bold;
+        }
+
+        .mode-switch {
+            display: flex;
+            justify-content: center;
+            margin: 1em;
+        }
+
+        .mode-switch button {
+            min-height: 44px;
+            padding: 0.6em 1em;
+            border: 1px solid #183551;
+            background: #F0F0F0;
+            color: #183551;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .mode-switch button[aria-pressed="true"] {
+            background: #183551;
+            color: white;
+        }
+
+        #secondarycounter {
+            text-align: center;
+        }
+
+        @media (max-width: 400px) {
+            h1 { font-size: 1.6em; }
+            #maincounter { font-size: 2.7em; }
+            table { font-size: 12px; }
         }
 
         ul,
@@ -273,29 +314,34 @@ const page = `<!doctype html>
     </style>
 </head>
 <body>
-<h1>GDP around a point</h1>
+<h1 id="heading">Population around a point</h1>
+<div class="mode-switch" role="group" aria-label="Display">
+<button type="button" id="populationmode" aria-pressed="true">Population</button>
+<button type="button" id="gdpmode" aria-pressed="false">GDP</button>
+</div>
 <p style="text-align:center">GDP and population within a distance, from any point in the world.</p>
 <p style="text-align:center">Select a radius and click on the map.</p>
 <p style="text-align:center"><input type="range" id="range" min="3" value="5" max="100" step="1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<label for="range" id="rangelabel">5</label> km.</p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
-<p>Estimated GDP within the circle in 2024:</p>
-<p style="text-align:center" id="gdpcounter" aria-live="polite">--</p>
-<p style="text-align:center" id="populationcounter"></p>
-<p style="text-align:center" id="perheadcounter"></p>
+<p id="resultlabel">Population within circle in 2025:</p>
+<p style="text-align:center" id="maincounter" aria-live="polite">--</p>
+<p id="secondarycounter"></p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
-<p>GDP at purchasing power parity, in 2021 international dollars, which are roughly US dollars adjusted so that a dollar buys the same amount everywhere.</p>
-<p>These are estimates. Official regional GDP is shared out by where people live, not where they work. Places with many jobs and few residents (city centres, ports, airports and business parks) are under-counted, and small circles mostly reflect population.</p>
 <h2>Give me the data!</h2>
 <div id="table"></div>
 <h2>Sources and credits</h2>
-<p>Adapted from <a href="https://www.tomforth.co.uk/circlepopulations/">Tom Forth's original Population around a point tool and page</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
-<p>GDP: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">13 March 2026 data release</a>, 2024 layer (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Population: <a href="https://ghsl.jrc.ec.europa.eu/ghs_pop2023.php">GHSL GHS-POP R2023A, 2025</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Both use a 30 arc-second grid. Each cell is counted when its centre is inside the circle.</p>
+<p>Based on <a href="https://www.tomforth.co.uk/circlepopulations/">Tom Forth's Population around a point tool and page</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
+<p>GDP, 2024: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">March 2026 release</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
+<p>Population, 2025: <a href="https://ghsl.jrc.ec.europa.eu/ghs_pop2023.php">GHS-POP R2023A, European Commission Joint Research Centre</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
 <script>
 var map = L.map('map').setView([20, 0], 2);
 var CirclesLayer = L.featureGroup().addTo(map);
 var selectedPoint = null;
 var pendingRequest = null;
+var lastResult = null;
+var params = new URLSearchParams(location.search);
+var mode = params.get('mode') === 'gdp' ? 'gdp' : 'population';
 var range = document.getElementById('range');
 var numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 function money(value) {
@@ -306,8 +352,29 @@ function money(value) {
   return '$' + numberFormat.format(value);
 }
 function perHead(value) {
-  return value === null ? 'No population' : '$' + numberFormat.format(value) + ' per person';
+  return value === null ? '' : '$' + numberFormat.format(value);
 }
+function renderResult() {
+  var isGDP = mode === 'gdp';
+  document.getElementById('heading').textContent = isGDP ? 'GDP around a point' : 'Population around a point';
+  document.title = 'moneymap: ' + (isGDP ? 'GDP' : 'population') + ' around a point';
+  document.getElementById('populationmode').setAttribute('aria-pressed', String(!isGDP));
+  document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
+  document.getElementById('resultlabel').textContent = isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
+  document.getElementById('maincounter').textContent = lastResult ? (isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
+  document.getElementById('secondarycounter').textContent = lastResult ? (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person') : '';
+}
+function changeMode(nextMode) {
+  mode = nextMode;
+  var url = new URL(location.href);
+  if (mode === 'gdp') url.searchParams.set('mode', 'gdp');
+  else url.searchParams.delete('mode');
+  history.replaceState({}, '', url);
+  renderResult();
+}
+document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
+document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
+renderResult();
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
@@ -326,12 +393,11 @@ var reloadControl = L.Control.extend({
       selectedPoint = null;
       CirclesLayer.clearLayers();
       map.setView([20, 0], 2);
-      document.getElementById('gdpcounter').textContent = '--';
-      document.getElementById('populationcounter').textContent = '';
-      document.getElementById('perheadcounter').textContent = '';
+      lastResult = null;
+      renderResult();
       document.getElementById('table').textContent = '';
       document.getElementById('status').textContent = 'Click on the map to calculate.';
-      history.replaceState({}, '', location.pathname);
+      history.replaceState({}, '', location.pathname + (mode === 'gdp' ? '?mode=gdp' : ''));
     });
     return container;
   }
@@ -347,24 +413,23 @@ async function requestData(latitude, longitude) {
   if (pendingRequest) pendingRequest.abort();
   var controller = new AbortController();
   pendingRequest = controller;
-  document.getElementById('gdpcounter').textContent = '--';
-  document.getElementById('populationcounter').textContent = '';
-  document.getElementById('perheadcounter').textContent = '';
+  lastResult = null;
+  renderResult();
   document.getElementById('table').textContent = '';
   document.getElementById('status').textContent = 'Calculating…';
   var params = new URLSearchParams({ lat: latitude.toFixed(5), long: longitude.toFixed(5), distance_km: range.value, zoom: map.getZoom() });
+  if (mode === 'gdp') params.set('mode', 'gdp');
   history.replaceState({}, '', '?' + params);
   try {
     var response = await fetch('/api/circle?' + params, { signal: controller.signal });
     if (!response.ok) throw new Error(await response.text());
     var result = await response.json();
-    document.getElementById('gdpcounter').textContent = money(result.gdp);
-    document.getElementById('populationcounter').textContent = numberFormat.format(result.population) + ' people (2025)';
-    document.getElementById('perheadcounter').textContent = perHead(result.gdp_per_head);
+    lastResult = result;
+    renderResult();
     document.getElementById('status').textContent = '';
-    var tableHTML = '<table><thead><tr><th>Radius (km)</th><th>GDP</th><th>Population</th><th>GDP per head</th></tr></thead><tbody>';
+    var tableHTML = '<table><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th></tr></thead><tbody>';
     result.cumulative.forEach(function (row) {
-      tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + money(row.gdp) + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + perHead(row.gdp_per_head) + '</td></tr>';
+      tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td></tr>';
     });
     document.getElementById('table').innerHTML = tableHTML + '</tbody></table>';
   } catch (error) {
@@ -390,7 +455,6 @@ range.addEventListener('change', function () {
     requestData(selectedPoint[0], selectedPoint[1]);
   }
 });
-var params = new URLSearchParams(location.search);
 if (['lat', 'long', 'distance_km'].every(function (name) { return params.has(name) && params.get(name).trim() !== ''; })) {
   var latitude = Number(params.get('lat'));
   var longitude = Number(params.get('long'));
