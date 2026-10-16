@@ -154,6 +154,94 @@ async function circle(bucket, { latitude, longitude, radius }) {
   return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops, landValue, buildingValue), cumulative };
 }
 
+function shapeParameters(searchParams) {
+  const text = searchParams.get('points');
+  if (!text) return null;
+  const points = text.split(';').map(pair => pair.split(',').map(Number));
+  const valid = points.length >= 3 && points.length <= MAXIMUM_SHAPE_CORNERS && points.every(point =>
+    point.length === 2 && point.every(Number.isFinite) && Math.abs(point[0]) <= 90 && Math.abs(point[1]) <= 180);
+  return valid ? points : null;
+}
+
+// About the same number of tiles as the largest circles, so a shape costs no more to add up.
+const MAXIMUM_SHAPE_TILES = 36;
+const MAXIMUM_SHAPE_CORNERS = 100;
+
+function shapeAreaKm2(points) {
+  const meanLatitude = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+  const kilometresPerDegree = EARTH_RADIUS_KM * RADIANS;
+  let twiceArea = 0;
+  for (let index = 0; index < points.length; index++) {
+    const [latitudeA, longitudeA] = points[index];
+    const [latitudeB, longitudeB] = points[(index + 1) % points.length];
+    twiceArea += longitudeA * latitudeB - longitudeB * latitudeA;
+  }
+  return Math.abs(twiceArea) / 2 * kilometresPerDegree ** 2 * Math.cos(meanLatitude * RADIANS);
+}
+
+// The longitudes where the shape's edges cross a line of latitude, west to east.
+// A cell centre is inside the shape when an odd number of crossings lie west of it.
+function edgeCrossings(points, latitude) {
+  const crossings = [];
+  for (let index = 0; index < points.length; index++) {
+    const [latitudeA, longitudeA] = points[index];
+    const [latitudeB, longitudeB] = points[(index + 1) % points.length];
+    if ((latitudeA > latitude) !== (latitudeB > latitude)) {
+      crossings.push(longitudeA + (latitude - latitudeA) * (longitudeB - longitudeA) / (latitudeB - latitudeA));
+    }
+  }
+  return crossings.sort((a, b) => a - b);
+}
+
+async function shape(bucket, points) {
+  const latitudes = points.map(point => point[0]);
+  const longitudes = points.map(point => point[1]);
+  const firstRow = Math.max(0, Math.floor((GRID.north - Math.max(...latitudes)) / GRID.pixelHeight));
+  const lastRow = Math.min(GRID.height - 1, Math.floor((GRID.north - Math.min(...latitudes)) / GRID.pixelHeight));
+  const firstColumn = Math.max(0, Math.floor((Math.min(...longitudes) - GRID.west) / GRID.pixelWidth));
+  const lastColumn = Math.min(GRID.width - 1, Math.floor((Math.max(...longitudes) - GRID.west) / GRID.pixelWidth));
+  const tileCoordinates = [];
+  for (let tileRow = Math.floor(firstRow / GRID.tileSize); tileRow <= Math.floor(lastRow / GRID.tileSize); tileRow++) {
+    for (let tileColumn = Math.floor(firstColumn / GRID.tileSize); tileColumn <= Math.floor(lastColumn / GRID.tileSize); tileColumn++) {
+      tileCoordinates.push([tileRow, tileColumn]);
+    }
+  }
+  if (tileCoordinates.length > MAXIMUM_SHAPE_TILES) return null;
+  const sums = new Float64Array(LAYERS.length);
+  await Promise.all(tileCoordinates.map(async ([tileRow, tileColumn]) => {
+    const layers = await Promise.all(LAYERS.map(async layer => {
+      const object = await bucket.get(`layers/${layer}/${tileRow}/${tileColumn}.bin`);
+      if (!object) return null;
+      const bytes = await object.arrayBuffer();
+      if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${layer}/${tileRow}/${tileColumn}`);
+      return new DataView(bytes);
+    }));
+    if (layers.every(layer => layer === null)) return;
+    const rowStart = tileRow * GRID.tileSize;
+    const columnStart = tileColumn * GRID.tileSize;
+    for (let row = Math.max(firstRow, rowStart); row <= Math.min(lastRow, rowStart + GRID.tileSize - 1); row++) {
+      const crossings = edgeCrossings(points, GRID.north - (row + 0.5) * GRID.pixelHeight);
+      let crossingsToTheWest = 0;
+      for (let column = Math.max(firstColumn, columnStart); column <= Math.min(lastColumn, columnStart + GRID.tileSize - 1); column++) {
+        const cellLongitude = GRID.west + (column + 0.5) * GRID.pixelWidth;
+        while (crossingsToTheWest < crossings.length && crossings[crossingsToTheWest] <= cellLongitude) crossingsToTheWest++;
+        if (crossingsToTheWest % 2 === 0) continue;
+        const cellIndex = (row - rowStart) * GRID.tileSize + column - columnStart;
+        layers.forEach((values, layerIndex) => {
+          if (values) sums[layerIndex] += values.getFloat32(cellIndex * 4, true);
+        });
+      }
+    }
+  }));
+  const value = layer => sums[LAYERS.indexOf(layer)];
+  return {
+    points, area_km2: shapeAreaKm2(points), lat: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
+    long: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
+    ...totals(value('gdp'), value('population'), value('bus_stops'), value('tram_stops'), value('rail_stops'), value('land_value'), value('building_value')),
+    cumulative: [],
+  };
+}
+
 // deploy/sync-tiles.mjs lists, writes and deletes data here. Without the token these paths do not exist.
 // GET /__upload/layers/<layer>/ returns {key: etag}; R2's etag is the MD5 of the tile.
 // PUT and DELETE /__upload/layers/<layer>/<tileRow>/<tileColumn>.bin write or remove one tile.
@@ -224,6 +312,13 @@ export default {
         circle(env.TILES, parameters), nearestPlace(env.TILES, parameters.latitude, parameters.longitude),
       ]);
       return Response.json({ ...result, place });
+    }
+    if (request.method === 'GET' && url.pathname === '/api/shape') {
+      const points = shapeParameters(url.searchParams);
+      if (!points) return new Response(`Use points=lat,long;lat,long;... with 3 to ${MAXIMUM_SHAPE_CORNERS} corners.`, { status: 400 });
+      const result = await shape(env.TILES, points);
+      if (!result) return new Response('That shape is too big. Keep it under about 400 km across.', { status: 400 });
+      return Response.json({ ...result, place: await nearestPlace(env.TILES, result.lat, result.long) });
     }
     return notFound();
   },
@@ -401,6 +496,32 @@ const page = `<!doctype html>
             vertical-align: middle;
         }
 
+        .link-button {
+            border: none;
+            background: none;
+            padding: 0;
+            color: #183551;
+            text-decoration: underline;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        #finishshape {
+            border: 1px solid #183551;
+            background: #183551;
+            color: white;
+            font: inherit;
+            padding: 0.2em 0.7em;
+            cursor: pointer;
+        }
+
+        #finishshape:disabled {
+            background: #F0F0F0;
+            color: #888;
+            border-color: #ccc;
+            cursor: default;
+        }
+
         #resultlabel, #secondarycounter, #stopcounter, #billionairecounter {
             margin: 0.35em 1em;
         }
@@ -520,7 +641,8 @@ const page = `<!doctype html>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
 <button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p class="controls">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km.</p>
+<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button></p>
+<p class="controls" id="shapecontrols" hidden>Click the map to add corners, then <button type="button" id="finishshape" disabled>Finish shape</button> <button type="button" class="link-button" id="backtocircle">Back to circles</button></p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
 <p id="resultlabel">Population within circle in 2025:</p>
 <p style="text-align:center" id="maincounter" aria-live="polite">--</p>
@@ -660,8 +782,9 @@ function perHead(value) {
 }
 // Where the circle is, from the nearest named place the API returns.
 function whereText() {
-  if (!lastResult) return 'within the circle';
-  var radius = 'within ' + lastResult.distance_km + ' km of ';
+  if (!lastResult) return drawingShape ? 'in the shape' : 'within the circle';
+  var isShape = lastResult.points !== undefined;
+  var radius = isShape ? 'in a ' + numberFormat.format(Number(lastResult.area_km2.toPrecision(2))) + ' km² shape around ' : 'within ' + lastResult.distance_km + ' km of ';
   var place = lastResult.place;
   if (!place) return radius + Math.abs(lastResult.lat).toFixed(2) + '°' + (lastResult.lat >= 0 ? 'N' : 'S') + ' ' + Math.abs(lastResult.long).toFixed(2) + '°' + (lastResult.long >= 0 ? 'E' : 'W');
   var name = place.name + ', ' + place.country.replace(/^The /, 'the ');
@@ -693,7 +816,7 @@ function renderResult() {
   var scale = isProperty && lastResult ? inBillionaires(lastResult.land_value + lastResult.building_value) : null;
   document.getElementById('billionairecounter').textContent = scale ? scale.text : '';
   document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
-  document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
+  document.getElementById('stopcounter').textContent = lastResult ? (lastResult.points ? 'The shape' : 'The circle') + ' also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
   document.getElementById('copyimage').disabled = !lastResult;
   document.getElementById('imagestatus').textContent = '';
   renderTable();
@@ -743,12 +866,20 @@ function drawShareCard() {
   });
   context.globalAlpha = 1;
   CirclesLayer.eachLayer(function (circle) {
-    var bounds = circle.getBounds();
-    var northWest = map.latLngToContainerPoint(bounds.getNorthWest());
-    var southEast = map.latLngToContainerPoint(bounds.getSouthEast());
     context.beginPath();
-    context.ellipse((northWest.x + southEast.x) / 2, (northWest.y + southEast.y) / 2,
-      (southEast.x - northWest.x) / 2, (southEast.y - northWest.y) / 2, 0, 0, 2 * Math.PI);
+    if (circle instanceof L.Polygon) {
+      circle.getLatLngs()[0].forEach(function (corner) {
+        var point = map.latLngToContainerPoint(corner);
+        context.lineTo(point.x, point.y);
+      });
+      context.closePath();
+    } else {
+      var bounds = circle.getBounds();
+      var northWest = map.latLngToContainerPoint(bounds.getNorthWest());
+      var southEast = map.latLngToContainerPoint(bounds.getSouthEast());
+      context.ellipse((northWest.x + southEast.x) / 2, (northWest.y + southEast.y) / 2,
+        (southEast.x - northWest.x) / 2, (southEast.y - northWest.y) / 2, 0, 0, 2 * Math.PI);
+    }
     context.fillStyle = circle.options.fillColor || circle.options.color;
     context.globalAlpha = circle.options.fillOpacity;
     context.fill();
@@ -833,7 +964,7 @@ async function copyImage() {
   }
 }
 function renderTable() {
-  if (!lastResult) {
+  if (!lastResult || !lastResult.cumulative.length) {
     document.getElementById('table').textContent = '';
     return;
   }
@@ -875,12 +1006,15 @@ var reloadControl = L.Control.extend({
       L.DomEvent.preventDefault(event);
       if (pendingRequest) pendingRequest.abort();
       selectedPoint = null;
+      shapeCorners = [];
+      shapeFinished = false;
+      document.getElementById('finishshape').disabled = true;
       CirclesLayer.clearLayers();
       map.setView([20, 0], 2);
       lastResult = null;
       renderResult();
       document.getElementById('table').textContent = '';
-      document.getElementById('status').textContent = 'Click on the map to calculate.';
+      document.getElementById('status').textContent = drawingShape ? 'Click the map to add corners.' : 'Click on the map to calculate.';
       history.replaceState({}, '', location.pathname + (mode === 'population' ? '' : '?mode=' + mode));
     });
     return container;
@@ -924,13 +1058,17 @@ async function requestData(latitude, longitude) {
   }
 }
 map.on('click', function (event) {
+  if (drawingShape) {
+    addShapeCorner([event.latlng.lat, Math.max(-180, Math.min(180, event.latlng.wrap().lng))]);
+    return;
+  }
   selectedPoint = [event.latlng.lat, Math.max(-180, Math.min(180, event.latlng.wrap().lng))];
   drawcircles(selectedPoint[0], selectedPoint[1]);
   requestData(selectedPoint[0], selectedPoint[1]);
 });
 map.on('zoomend', function () {
   var url = new URL(location.href);
-  if (url.searchParams.has('lat')) {
+  if (url.searchParams.has('lat') || url.searchParams.has('shape')) {
     url.searchParams.set('zoom', map.getZoom());
     history.replaceState({}, '', url);
   }
@@ -942,6 +1080,88 @@ range.addEventListener('change', function () {
     requestData(selectedPoint[0], selectedPoint[1]);
   }
 });
+// Shapes: click corners, then Finish shape. The link keeps the corners as shape=lat,long;lat,long;...
+var drawingShape = false;
+var shapeCorners = [];
+var shapeFinished = false;
+var MAXIMUM_SHAPE_CORNERS = 100;
+function showShapeControls(showShape) {
+  drawingShape = showShape;
+  document.getElementById('circlecontrols').hidden = showShape;
+  document.getElementById('shapecontrols').hidden = !showShape;
+  if (pendingRequest) pendingRequest.abort();
+  selectedPoint = null;
+  shapeCorners = [];
+  shapeFinished = false;
+  document.getElementById('finishshape').disabled = true;
+  CirclesLayer.clearLayers();
+  lastResult = null;
+  renderResult();
+  document.getElementById('status').textContent = showShape ? 'Click the map to add corners.' : 'Click on the map to calculate.';
+  history.replaceState({}, '', location.pathname + (mode === 'population' ? '' : '?mode=' + mode));
+}
+function drawShapeCorners() {
+  CirclesLayer.clearLayers();
+  if (shapeFinished) {
+    L.polygon(shapeCorners).addTo(CirclesLayer);
+    return;
+  }
+  if (shapeCorners.length > 1) L.polyline(shapeCorners, { dashArray: '6 6' }).addTo(CirclesLayer);
+  shapeCorners.forEach(function (corner) { L.circleMarker(corner, { radius: 4 }).addTo(CirclesLayer); });
+}
+function addShapeCorner(corner) {
+  if (shapeFinished) {
+    shapeCorners = [];
+    shapeFinished = false;
+    lastResult = null;
+    renderResult();
+  }
+  if (shapeCorners.length >= MAXIMUM_SHAPE_CORNERS) return;
+  shapeCorners.push(corner);
+  document.getElementById('finishshape').disabled = shapeCorners.length < 3;
+  document.getElementById('status').textContent = shapeCorners.length < 3 ? 'Click the map to add corners.' : 'Add more corners or finish the shape.';
+  drawShapeCorners();
+}
+async function finishShape() {
+  if (shapeCorners.length < 3) return;
+  shapeFinished = true;
+  document.getElementById('finishshape').disabled = true;
+  drawShapeCorners();
+  selectedPoint = CirclesLayer.getBounds().getCenter();
+  selectedPoint = [selectedPoint.lat, selectedPoint.lng];
+  if (pendingRequest) pendingRequest.abort();
+  var controller = new AbortController();
+  pendingRequest = controller;
+  lastResult = null;
+  renderResult();
+  document.getElementById('status').textContent = 'Calculating…';
+  var corners = shapeCorners.map(function (corner) { return corner[0].toFixed(5) + ',' + corner[1].toFixed(5); }).join(';');
+  var link = new URLSearchParams({ shape: corners, zoom: map.getZoom() });
+  if (mode !== 'population') link.set('mode', mode);
+  history.replaceState({}, '', '?' + link);
+  try {
+    var response = await fetch('/api/shape?' + new URLSearchParams({ points: corners }), { signal: controller.signal });
+    if (!response.ok) throw new Error(await response.text());
+    lastResult = await response.json();
+    renderResult();
+    document.getElementById('status').textContent = '';
+  } catch (error) {
+    if (error.name !== 'AbortError') document.getElementById('status').textContent = 'Could not calculate: ' + error.message;
+  }
+}
+document.getElementById('drawshape').addEventListener('click', function () { showShapeControls(true); });
+document.getElementById('backtocircle').addEventListener('click', function () { showShapeControls(false); });
+document.getElementById('finishshape').addEventListener('click', finishShape);
+if (params.has('shape')) {
+  var linkedCorners = params.get('shape').split(';').map(function (pair) { return pair.split(',').map(Number); });
+  if (linkedCorners.length >= 3 && linkedCorners.every(function (corner) { return corner.length === 2 && corner.every(Number.isFinite); })) {
+    showShapeControls(true);
+    linkedCorners.forEach(addShapeCorner);
+    map.fitBounds(L.latLngBounds(linkedCorners));
+    if (params.has('zoom') && Number.isFinite(Number(params.get('zoom')))) map.setZoom(Number(params.get('zoom')));
+    finishShape();
+  }
+}
 if (['lat', 'long', 'distance_km'].every(function (name) { return params.has(name) && params.get(name).trim() !== ''; })) {
   var latitude = Number(params.get('lat'));
   var longitude = Number(params.get('long'));
