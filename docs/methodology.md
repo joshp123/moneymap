@@ -1,4 +1,4 @@
-Written by AI on 2026.10.16 by model claude opus 5.5.
+Written by AI on 2026.10.16 by model claude opus 5.5; land and building split updated on 2026.10.17 by model gpt-6.1-sol.
 
 # How the numbers are calculated
 
@@ -17,9 +17,9 @@ We publish the method, the test results and the known errors so that others can 
 | Population | People who live in the circle | 2025; people | GHS-POP, European Commission | Matches Tom Forth's site, which uses the same GHSL 2025 population data, within 0.8% |
 | Stops | Bus, tram, metro and train stops | Mapped by September 2026; stops | OpenStreetMap, via Overture Maps | Bus stops within 3% of Tom Forth's counts in the test circles; tram and rail differ in some areas |
 | GDP | Value of what is produced in the circle | 2024; international dollars (PPP) | National and official regional GDP, spread by jobs, buildings and business locations | In tests, 5% to 25% of GDP lands in the wrong small region; business districts in much of Asia are probably too low |
-| Land value | Market value of land, without buildings | 2024; US dollars | National balance sheets, or a model | In tests, 12% to 29% of value lands in the wrong municipality or county; rich city centres can read 2 to 3 times too low |
-| Building value | Value of homes and other buildings, after wear | 2024; US dollars | National balance sheets, or a model | In tests, 13% to 23% lands in the wrong area; dense business districts read too high |
-| Property value | Land plus buildings | 2024; US dollars | As above | In tests, 10% to 26% lands in the wrong area |
+| Land value | Market value of land, without buildings | 2024; US dollars | National balance sheets, or a model | In tests, 10% to 25% of value lands in the wrong municipality or county, and 42% in US census tracts; rich city centres can read over twice too low |
+| Building value | Value of homes and other buildings, after wear | 2024; US dollars | National balance sheets, or a model | In tests, 11% to 19% lands in the wrong municipality or county, and 32% in US census tracts; dense business districts read too high |
+| Property value | Land plus buildings | 2024; US dollars | As above | In tests, 9% to 25% lands in the wrong municipality, county or tested grid square, and 35% in US census tracts |
 
 ## Reading a result
 
@@ -39,7 +39,7 @@ The site's US total is 1.5% above BEA's official 2024 figure. Land and buildings
 
 **Precision.** The site shows money to one decimal place of a million, billion or trillion, and people to the person. The estimates are far less precise than that.
 
-**Billionaires.** For scale, property value mode names up to three billionaires whose net worth is nearest the circle's total (between a quarter and ten times it), with a key of what each owns. The ladder runs from Rihanna ($1.0 billion) through Oprah, Steven Spielberg, James Dyson, Peter Thiel, Michael Bloomberg, Bill Gates and Mark Zuckerberg to Elon Musk ($908.5 billion), using each person's Forbes real-time profile on 16 October 2026. The list is in `worker/index.js`.
+**Billionaires.** For scale, property value mode names up to three billionaires whose net worth is nearest the circle's total (between a quarter and ten times it), with each person's net worth in brackets. The ladder runs from Rihanna ($1.0 billion) through Oprah, Steven Spielberg, James Dyson, Peter Thiel, Michael Bloomberg, Bill Gates and Mark Zuckerberg to Elon Musk ($908.5 billion), using each person's Forbes real-time profile on 16 October 2026. The list is in `worker/index.js`.
 
 ## How we tested the numbers
 
@@ -56,11 +56,11 @@ For land and buildings, each test first scales our total over the valued areas t
 
 **Independent figures.** We compare with Tom Forth's site, with lower bounds built from big companies' accounts, and with official land and property valuations that no rule was fitted to.
 
-**The website matches the grids.** `checks/circles.py` asks the site for 36 named circles and compares every total and every kilometre row with sums taken directly from the source grids, without reading the stored tiles. All 36 match, both on a local copy of the site and on the live site after the current version was deployed.
+**The website matches the grids.** `checks/circles.py` asks the real Worker for 40 named circles and compares every total and every kilometre row with sums taken directly from the source grids, without reading the stored tiles. All 40 match locally with the revised land and building rules. GDP, population and stops are unchanged. This revision has not been deployed.
 
 These tests have limits:
 
-- The hold-out tests chose between a few rules fixed in advance, with simple weights such as halves and thirds. So their scores flatter the chosen rule a little. The land rule's two parameters were set on New South Wales, which is therefore not among its tests.
+- The hold-out tests chose between a few rules fixed in advance, with simple weights such as halves and thirds. So their scores flatter the chosen rule a little. The revised land and building rules were chosen on odd-numbered US states and checked on even-numbered states in the contiguous US; the tables below retain that hold-out. The other valuation tests also informed the choice, so they are comparisons, not wholly independent validation.
 - Hold-out tests spread a large area's total over areas of thousands to millions of people. The site often spreads a county's or a province's total over cells 1 km wide. At the scale of a 1 to 3 km circle, only the company bounds and a few named places test the result.
 - The land, building and property tests compare shares within an area. National totals have their own tests.
 
@@ -282,46 +282,62 @@ Code: `sources/land_value.py`, `layers/land_value/`.
 ```
 cell land = country land × ( ½ × cell's weighted residents ÷ country's weighted residents
                            + ½ × cell GDP ÷ country GDP )
-weighted residents = cell residents × (people per km² within about 40 km)^0.25
+weighted residents = cell residents × local density^0.5 × relative local income²
+relative local income = (neighbourhood GDP ÷ neighbourhood residents)
+                        ÷ (country GDP ÷ country residents)
 ```
 
-"People per km² within about 40 km" counts residents up to 320 km away, each weighted by e^(−distance ÷ 40 km), divided by the area under that weight. It is computed on a grid of 5 arc-minutes (about 9 km) and interpolated to the cells. GDP is the site's own GDP layer.
+Density and income use the same neighbourhood: cells up to 320 km away weighted by e^(−distance ÷ 40 km). Density divides the weighted residents by the area under that kernel. Both fields are computed on a grid of 5 arc-minutes (about 9 km), then interpolated to the cells. GDP is the site's production GDP layer. National income sets the scale; dividing by the country's weighted-resident sum makes each country keep its total.
 
-Land prices rise with city size. Urban economics studies, as cited in the [land value research](land-value-research.md), find that land prices at city centres rise by about 0.3% for each 1% more people (Combes, Duranton and Gobillon, 2019); the exponent 0.25 is close to that. The GDP half adds where the economy is. There is no separate farmland term: in tests, a cropland term never helped.
+The rule was selected from fixed candidates in the [land and building split study](land-value-research.md#land-and-building-split-fable-17-october-2026). It lets land shares rise with local density and income, while the GDP half keeps weight at workplaces. There is no farmland or building-volume term.
 
 ### How we checked it
 
 **National totals.** The independent review of the land method left each full reporter out in turn, refitted the model and predicted the missing country. The typical error was a factor of 1.56. On the 13 household-only countries, which the model never saw, it was a factor of 1.95, with no bias up or down. A model using GDP per head fitted the reporters better but failed on other countries: it put India's land at 0.21 times GDP. Independent figures agree better with the chosen model, although the review had to infer the ratios from them: India's 2019 All India Debt and Investment Survey suggests roughly 1.7 times GDP (model 1.6), and China's national balance sheet from the Chinese Academy of Social Sciences suggests roughly 1.5 to 2.5 times (model 2.1). For the US, BEA researchers' estimate of all private land in 2015, set against the Federal Reserve's household land figure, implies that households held roughly 0.59 of it, close to the 0.6 we assume.
 
-**Within countries.** The production layer against official land values that no rule was fitted to:
+**Within countries.** These checks sample the built production rasters using the split study's frozen cell-to-valuation-area links. The US county and tract rows use only even-numbered states in the contiguous US. Before is the previous density^0.25 land rule; after is the density^0.5 and income² rule.
 
-| Official land values | Areas | Wrong-area share | Median absolute log ratio |
+| Official values | Areas | Before: wrong-area share / median absolute log ratio | After: wrong-area share / median absolute log ratio |
 |---|---:|---:|---:|
-| North Rhine-Westphalia municipalities: official land prices (Bodenrichtwerte) 2026 × zone area | 396 | 14.80% | 0.278 |
-| Japanese municipalities: fixed-asset tax land values, 2025 | 1,719 | 19.15% | 0.655 |
-| Danish municipalities: taxable land value, 2025 | 98 | 14.72% | 0.259 |
-| Victorian councils: site value, 2026 | 79 | 18.60% | 0.388 |
-| British Columbia municipalities: land value, 2026 roll | 160 | 11.91% | 0.579 |
-| US counties: residential land only (Federal Housing Finance Agency (FHFA) land share × American Community Survey (ACS) home values) | 2,423 | 28.88% | 0.791 |
-| New York City community districts: Department of Finance land values | 59 | 26.44% | 0.356 |
+| US counties, residential land | 1,085 | 29.87% / 0.838 | 25.23% / 0.551 |
+| US census tracts, residential land | 27,010 | 45.60% / 0.827 | 42.33% / 0.732 |
+| New York City community districts | 59 | 26.48% / 0.357 | 21.09% / 0.343 |
+| Victorian councils | 79 | 18.60% / 0.388 | 19.45% / 0.480 |
+| British Columbia municipalities | 160 | 11.91% / 0.579 | 9.80% / 0.448 |
+| North Rhine-Westphalia municipalities | 396 | 14.80% / 0.278 | 14.06% / 0.269 |
+| Japanese municipalities | 1,719 | 19.15% / 0.655 | 17.23% / 0.455 |
+| Danish municipalities | 98 | 14.71% / 0.259 | 15.43% / 0.223 |
 
-The review chose this rule from seven fixed candidates across ten such tests, on an earlier GDP layer. It was best in five and within 2.5 percentage points of the best in all ten, with a mean wrong-area share of 17.1% against 20.2% for population alone. Details: [land value research](land-value-research.md#fable-review).
+The mean wrong-area share falls from 22.64% to 20.58%, reproducing Fable's selected rule to less than 0.00001 percentage points. Victoria worsens on both measures; Denmark's wrong-area share worsens while its typical area's error improves. US land values here are residential only: FHFA land shares multiplied by ACS owner-occupied home values. The other tests use the official land valuations described in the [research notes](land-value-research.md).
 
-**Circles.** The review also drew circles on North Rhine-Westphalia's official land prices around eight cities and four rural centres. It ran on the earlier GDP layer, but German GDP has not changed since, so the results hold. The typical error of the circle total (median absolute log ratio, both scaled to the state total) is:
+**Land shares.** The separate FHFA smoke test compares all 2,436 counties with usable residential land shares, rather than only the held-out states:
+
+| Measure | Before | After | FHFA |
+|---|---:|---:|---:|
+| Median land share of property | 36.8% | 28.5% | 17.9% |
+| 10th to 90th percentile | 31.0–43.5% | 20.4–40.3% | 11.2–31.8% |
+| Pearson correlation | 0.432 | 0.446 | |
+| Rank correlation | 0.409 | 0.347 | |
+
+The spread is wider and closer to FHFA, but county ordering worsens. On the frozen held-out units, rank correlation improves from 0.483 to 0.614 for census tracts and 0.431 to 0.479 for ZIP codes, while counties fall from 0.432 to 0.332. At tract scale the 10th to 90th percentile widens from 35.0–50.3% to 23.0–58.8%, against FHFA's 14.8–52.1%.
+
+**Circles.** Fable's split study checked North Rhine-Westphalia circles against official land prices, with both sides scaled to the state's total. This uses the same German GDP and selected rule; its median absolute log ratios are:
 
 | Radius | 3 km | 5 km | 10 km | 20 km | 30 km | 50 km |
 |---|---:|---:|---:|---:|---:|---:|
-| Median absolute log ratio | 0.38 | 0.35 | 0.34 | 0.32 | 0.27 | 0.23 |
+| Before | 0.403 | 0.348 | 0.256 | 0.339 | 0.324 | 0.194 |
+| After | 0.359 | 0.312 | 0.299 | 0.294 | 0.299 | 0.174 |
 
-So a 10 km circle is typically out by a factor of 1.4, and a 50 km circle by a factor of 1.26.
+The 10 km score worsens despite the overall municipal improvement. These circle tests compare spatial shares, not national totals.
 
-**Totals.** All 235 country totals come back out of the grid; across the world the grid differs from the target by $22,791 in $239.24 trillion.
+**Totals.** Every one of the 235 national targets is exactly unchanged. The target is $239.242023 trillion; the float32 grid is $8,886 higher. The largest country error is 0.00000147%. Reading the tiles back differs from the grid sum by $1.08.
 
 ### Known problems
 
-- **Rich city centres read low, cheaper cities of the same density read high.** Against the official land prices, the 3 km circle around Cologne cathedral gets 0.60 times its value and Düsseldorf 0.37 times. In the municipality test, the density weight alone puts Düsseldorf and Cologne 2 to 2.5 times too low and the Ruhr cities, such as Gelsenkirchen, 2.5 times too high; the GDP half narrows this gap. The model sees density, not regional price levels, and it cannot see resort towns or mining towns.
-- **Tokyo's centre is about half what it should be.** Tokyo's 23 wards hold 21.8% of Japan's official land value; moneymap puts 11.3% there.
-- **US residential land by county** is typically out by a factor of 2.2 (median absolute log ratio 0.79).
+- **County ordering is still poor.** The new rule improves local spread but cannot reproduce all regional land-price differences. In the all-county FHFA smoke test, rank correlation falls from 0.409 to 0.347. No state adjustment was added.
+- **Honolulu is too low; St Louis and Detroit are too high.** County land shares are 35.4% in Honolulu against FHFA's 63.2%, 42.8% in St Louis city against 13.6%, and 40.7% in Wayne County, which contains Detroit, against 21.7%. These are county residential comparisons; the Detroit city-centre circle has a different boundary and includes commercial property.
+- **Düsseldorf's centre remains too low.** Fable's 3 km circle around Königsallee rises from 0.40 to 0.43 times its official land value, after scaling both to North Rhine-Westphalia's total. The 10 km production circle has a land share of 45.6%, against Gelsenkirchen's 40.8%; this ordering is better, but it does not establish the right price level.
+- **Tokyo's centre remains too low.** The split study puts 14.3% of Japan's land in Tokyo's 23 wards, up from 11.3%, against their official 21.8%.
 - **Modelled national totals are uncertain.** The 207 modelled countries hold $104 trillion, 44% of world land value. Their totals carry a typical error of a factor of 1.6 to 1.9.
 
 ## Building and property value
@@ -358,44 +374,64 @@ With land, the world's property comes to $464 trillion. Savills, a property firm
 **Step 2: within each country.**
 
 ```
-cell buildings = country buildings × ( ⅓ × cell residents ÷ country residents
-                                     + ⅓ × cell GDP ÷ country GDP
-                                     + ⅓ × cell building volume ÷ country building volume )
+cell buildings = country buildings × ( 0.7 × cell residents ÷ country residents
+                                     + 0.3 × cell GDP ÷ country GDP )
 ```
 
-Building volume is GHSL's total built volume for 2025, homes and other buildings together, shifted onto the population grid as for GDP.
+GDP is the production GDP layer. The building allocation no longer reads GHSL building volume. Every national building target and its source remain unchanged.
 
 ### How we checked it
 
-We compared four fixed rules for spreading buildings within a country, against official valuations. Each entry is wrong-area share / median absolute log ratio. The first four rows score buildings; Amsterdam scores homes, land and buildings together.
+The fixed 70% residents / 30% GDP rule was selected in Fable's [split study](land-value-research.md#land-and-building-split-fable-17-october-2026). These scores use the production rasters on the same frozen valuation areas as that study, including its held-out US states. Before is the previous equal-thirds residents, GDP and volume rule.
 
-| Official values | Areas | Volume | Residents | Residents and GDP | Thirds (used) |
-|---|---:|---:|---:|---:|---:|
-| Victorian councils, 2026 | 79 | 19.5% / 0.37 | 16.1% / 0.16 | 15.0% / 0.19 | 15.3% / 0.25 |
-| British Columbia municipalities, 2026 roll | 160 | 16.9% / 0.39 | 10.4% / 0.22 | 11.3% / 0.32 | 12.9% / 0.35 |
-| US counties, owner-occupied homes | 2,423 | 18.0% / 0.44 | 13.9% / 0.32 | 14.3% / 0.25 | 14.2% / 0.31 |
-| New York City community districts | 59 | 26.1% / 0.45 | 25.2% / 0.40 | 26.4% / 0.36 | 23.4% / 0.35 |
-| Amsterdam area, homes | 73 | 25.9% / 0.49 | 23.2% / 0.44 | 26.1% / 0.52 | 26.1% / 0.49 |
-| Mean wrong-area share | | 21.3% | 17.8% | 18.6% | 18.4% |
+| Official values | Areas | Before: wrong-area share / median absolute log ratio | After: wrong-area share / median absolute log ratio |
+|---|---:|---:|---:|
+| US counties, residential buildings | 1,085 | 14.26% / 0.313 | 13.91% / 0.284 |
+| US census tracts, residential buildings | 27,010 | 33.63% / 0.566 | 32.34% / 0.542 |
+| New York City community districts | 59 | 23.43% / 0.351 | 18.95% / 0.299 |
+| Victorian councils | 79 | 15.30% / 0.255 | 15.13% / 0.173 |
+| British Columbia municipalities | 160 | 12.94% / 0.354 | 10.81% / 0.284 |
 
-Residents alone had the lowest mean, but in New York it put 7.1% of building value in Manhattan's six core community districts, against 23.9% in the official figures. The thirds rule had the lowest error in New York and the second-lowest mean, so we chose it, accepting that it puts too much in the core.
+Mean wrong-area share falls from 19.91% to 18.23%; all five tests improve on both measures. The production result reproduces Fable's selected rule to rounding.
 
-For property, land plus buildings, the production layers score: Victoria 15.3% / 0.26, British Columbia 10.4% / 0.29, US owner-occupied homes 17.2% / 0.36, New York City 23.2% / 0.35, Amsterdam 26.1% / 0.49.
+Property value, land plus buildings, is also checked on the production rasters:
+
+| Official property values | Areas | Before: wrong-area share / median absolute log ratio | After: wrong-area share / median absolute log ratio |
+|---|---:|---:|---:|
+| US counties, owner-occupied homes | 1,085 | 17.50% / 0.388 | 15.96% / 0.290 |
+| US census tracts, owner-occupied homes | 27,010 | 36.54% / 0.605 | 35.05% / 0.580 |
+| New York City community districts | 59 | 23.28% / 0.352 | 17.00% / 0.280 |
+| Victorian councils | 79 | 15.34% / 0.261 | 16.04% / 0.347 |
+| British Columbia municipalities | 160 | 10.39% / 0.292 | 9.00% / 0.265 |
+| Amsterdam-area homes | 73 | 26.07% / 0.487 | 24.53% / 0.454 |
+
+**Production circle comparison.** Values are billions of 2024 US dollars. Each cell shows before → after. These are real Worker responses, checked against the rasters. Midtown is centred at 40.7549, −73.9840; the other coordinates are in `checks/circles.py`.
+
+| Circle | Land | Buildings | Land share |
+|---|---:|---:|---:|
+| Midtown, 3 km | 664.5 → 806.3 | 569.3 → 542.7 | 53.9% → 59.8% |
+| Bank, 3 km | 439.4 → 483.3 | 155.3 → 144.4 | 73.9% → 77.0% |
+| Amsterdam, 5 km | 140.5 → 156.6 | 88.8 → 95.1 | 61.3% → 62.2% |
+| Düsseldorf, 10 km | 126.2 → 131.8 | 157.9 → 157.3 | 44.4% → 45.6% |
+| Gelsenkirchen, 10 km | 102.4 → 97.8 | 140.9 → 141.8 | 42.1% → 40.8% |
+| Middlesbrough, 10 km | 43.0 → 29.2 | 30.0 → 25.3 | 58.9% → 53.6% |
+| Santa Clara, 10 km | 295.0 → 493.3 | 299.0 → 282.3 | 49.7% → 63.6% |
+| Detroit, 10 km | 86.4 → 87.8 | 98.8 → 86.7 | 46.6% → 50.3% |
 
 What the tests measure:
 
 - *Victoria:* capital improved value minus site value, 2026. Improvements can include more than buildings.
 - *British Columbia:* the 2026 roll at July 2025 values. Improvements include fixtures.
 - *US:* census figures for owner-occupied homes (ACS 2023), split into land and buildings with FHFA land shares. Rented homes and commercial property are missing, so this is a rough guide to where value sits.
-- *New York City:* Department of Finance market values on the 2024 final roll, for 1,146,125 lots in 59 community districts, homes and commercial property together. These are valuations set for property tax: they total $1.70 trillion, against moneymap's $3.67 trillion in the same districts, so only shares are compared.
+- *New York City:* Department of Finance market values on the 2024 final roll, for 1,146,125 lots in 59 community districts, homes and commercial property together. These are valuations set for property tax: they total $1.70 trillion, and only spatial shares are compared with the national-account values used here.
 - *Amsterdam area:* the CBS 500 m grid for 2023, average home tax value (WOZ, valued at 1 January 2022) × number of homes, summed into 73 squares of 2 km. Homes only, land and buildings together.
 
-**Totals.** All 235 country totals come back out of the grid; across the world the grid differs from the target by $14,895 in $224.78 trillion.
+**Totals.** All 235 country targets are exactly unchanged. The world target is $224.779322 trillion; the float32 grid is $1,984 higher. The largest country error is 0.00000200%. Reading all tiles back differs from the grid sum by $0.50.
 
 ### Known problems
 
-- **Manhattan's core is too high.** The thirds rule puts 42.6% of New York City's building value in Manhattan's six core districts, 1.78 times their official 23.9%. Across all of Manhattan it puts 50.3% against 34.6%. None of the four rules comes close in the core.
-- **The rule matters most in dense centres.** Across the four rules, buildings in the 6 km circle over Midtown and Lower Manhattan range from $104 billion (volume) to $1,338 billion (residents and GDP); the site shows $927 billion. Around Bank in London (3 km) they range from $22 billion to $222 billion; the site shows $155 billion.
+- **Manhattan's core is still too high.** The new rule puts 34.2% of New York City's buildings in Manhattan's six core districts, down from 42.6%, against 23.9% in the official tax values. Across all Manhattan it puts 43.2% against 34.6%. Land improves from 48.3% to 36.2% of the city total, against 33.0% official; the core holds 25.9% against 21.6%.
+- **Victoria's combined property score worsens.** Buildings improve slightly, but the changed land rule raises wrong-area share for land plus buildings from 15.34% to 16.04%.
 - **One ratio covers most of the world.** 203 countries, including China ($36.1 trillion of buildings), India and Australia, use 1.93 times GDP. The typical error is a factor of 1.35, and the worst reporter, Poland, would be 3 times too high.
 - **Tests and the site define buildings differently.** Victoria and British Columbia include fixtures, the US and Amsterdam tests cover homes only, and New York uses tax valuations.
 
@@ -419,7 +455,7 @@ moneymap is adapted from Tom Forth's [Population around a point](https://www.tom
 
 | Data | Used for | Licence and required attribution |
 |---|---|---|
-| [GHSL](https://human-settlement.emergency.copernicus.eu/datasets.php) GHS-POP, GHS-BUILT-V and GHS-BUILT-S, R2023A, 2025 | Population, building weight, building volume | European Commission, Joint Research Centre (JRC). [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Cite: Schiavina M., Freire S., Carioli A., MacManus K. (2023), GHS-POP R2023A, [doi:10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE](https://doi.org/10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE); Pesaresi M., Politis P. (2023), GHS-BUILT-V R2023A; Pesaresi M., Politis P. (2023), GHS-BUILT-S R2023A, [doi:10.2905/9F06F36F-4B11-47EC-ABB0-4F8B7B1D72EA](https://doi.org/10.2905/9F06F36F-4B11-47EC-ABB0-4F8B7B1D72EA). |
+| [GHSL](https://human-settlement.emergency.copernicus.eu/datasets.php) GHS-POP, GHS-BUILT-V and GHS-BUILT-S, R2023A, 2025 | Population and GDP building weight | European Commission, Joint Research Centre (JRC). [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Cite: Schiavina M., Freire S., Carioli A., MacManus K. (2023), GHS-POP R2023A, [doi:10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE](https://doi.org/10.2905/2FF68A52-5B5B-4A22-8F40-C41DA8332CFE); Pesaresi M., Politis P. (2023), GHS-BUILT-V R2023A; Pesaresi M., Politis P. (2023), GHS-BUILT-S R2023A, [doi:10.2905/9F06F36F-4B11-47EC-ABB0-4F8B7B1D72EA](https://doi.org/10.2905/9F06F36F-4B11-47EC-ABB0-4F8B7B1D72EA). |
 | Kummu et al., paper ([Scientific Data, 2025](https://doi.org/10.1038/s41597-025-04487-x)) and dataset, March 2026 release ([doi:10.5281/zenodo.18429133](https://doi.org/10.5281/zenodo.18429133)): band 8, `gdp_2024`, of `rast_gdpTot_1990_2024_30arcsec.tif`, and the admin-1 polygons. The release labels the unit 2021 international dollars, but its totals behave like 2024 PPP dollars (see Units); the file's embedded 2017 unit tag is out of date. | National and provincial GDP | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Cite both the paper and the dataset. |
 | [BEA](https://apps.bea.gov/regional/) county GDP and GDP by industry (CAGDP1, CAGDP2); [US Census](https://www2.census.gov/geo/tiger/GENZ2024/shp/) county boundaries; [LODES8](https://lehd.ces.census.gov/data/lodes/LODES8/) | US GDP regions and jobs | US government works, public domain |
 | [ONS small-area GVA](https://www.ons.gov.uk/economy/grossvalueaddedgva/datasets/uksmallareagvaestimates) and LSOA boundaries | UK GDP regions | [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). "Source: Office for National Statistics licensed under the Open Government Licence v.3.0. Contains OS data © Crown copyright and database right 2026." |
@@ -449,9 +485,9 @@ Build reports:
 - GDP: `data/build/gdp/conservation.json`, with every region's target, weights and rule;
 - land and buildings: `data/build/land_value/` and `data/build/building_value/`, each with `country_totals.csv` (every country's target, source and year) and `conservation.json`.
 
-Checks write `data/checks/`: `holdouts.json` for GDP, `land_value.json`, `building_value.json` and `building_value_candidates.json` for property, and `circles.json` for the site's answers.
+Checks write `data/checks/`: `holdouts.json` for GDP, `land_value.json` and `building_value.json` for valuation shares, `property_split.json` for property and land-share comparisons, `fhfa-before-split.json` and `fhfa-after-split.json` for the county smoke test, and `circles.json` for the site's answers.
 
-Two checks need outputs from the research scripts, which the build itself does not use. `checks/holdouts.py` reads `data/experiments/places/{us,uk,eu,br}_sums.json` and `unit_sums_summary.json`, written by `research/gdp/places_eval.py`. `checks/land_value.py` reads `data/experiments/land-value/*_scores.json` and `nrw_official_grid.npz`, written by the scripts in `research/land-value/`. Run those first.
+The checks need frozen test data that the build itself does not use. `checks/holdouts.py` reads `data/experiments/places/{us,uk,eu,br}_sums.json` and `unit_sums_summary.json`, written by `research/gdp/places_eval.py`. Land, building and property checks read `data/experiments/split/{cells_*,units_*}.npz`, prepared by `research/split/extract_cells.py` and `research/split/units.py`. Only cell coordinates, valuation links and official values are used; predictions come from the production rasters. `research/smoke/land_share_vs_fhfa.py` separately reads the county boundaries and FHFA shares from the land-value test data.
 
 ## Background notes
 

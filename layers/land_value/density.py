@@ -1,8 +1,8 @@
 """Written by AI on 2026.10.16 by model gpt-6.1-sol.
 
-Population density in an exponential 40 km neighbourhood. Sum the population
+Population and GDP density in an exponential 40 km neighbourhood. Sum each
 onto a 5 arc-minute grid, convolve along spherical latitude rings, then
-interpolate the smooth density field back onto the shared 30 arc-second grid.
+interpolate the smooth fields back onto the shared 30 arc-second grid.
 """
 import math
 
@@ -13,7 +13,8 @@ from layers.grid import (EARTH_RADIUS_KM, GRID_HEIGHT, GRID_TRANSFORM, GRID_WIDT
 
 COARSE_CELL_SIZE = 10
 DENSITY_DISTANCE_KM = 40.
-DENSITY_EXPONENT = .25
+DENSITY_EXPONENT = .5
+INCOME_EXPONENT = 2.
 KERNEL_DISTANCE_KM = 8 * DENSITY_DISTANCE_KM
 COARSE_ROWS = math.ceil(GRID_HEIGHT / COARSE_CELL_SIZE)
 COARSE_COLUMNS = GRID_WIDTH // COARSE_CELL_SIZE
@@ -80,5 +81,12 @@ def interpolate_density(density, window):
             horizontal[south-first]*row_fraction[:, None])
 
 
-def weighted_population(population, density, window):
-    return population.astype('float64') * interpolate_density(density, window)**DENSITY_EXPONENT
+def weighted_population(population, density, gdp_density, window, national_income):
+    """Residents × local density^0.5 × relative neighbourhood income²."""
+    local_density = interpolate_density(density, window)
+    local_gdp = interpolate_density(gdp_density, window)
+    local_income = np.divide(local_gdp, np.maximum(local_density, 1e-9))
+    relative_income = np.divide(local_income, national_income, out=np.ones_like(local_income),
+                                where=(local_density > 0) & (national_income > 0))
+    return (population.astype('float64') * np.maximum(local_density, 1e-6)**DENSITY_EXPONENT
+            * np.maximum(relative_income, 1e-6)**INCOME_EXPONENT)

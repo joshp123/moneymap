@@ -1,6 +1,6 @@
 """Written by AI on 2026.10.16 by model gpt-6.1-sol.
 
-Land follows equal shares of density-weighted residents and production GDP.
+Land follows equal shares of density- and income-weighted residents and GDP.
 The build and the held-out checks use this same allocation.
 """
 import numpy as np

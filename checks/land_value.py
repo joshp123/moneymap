@@ -1,29 +1,27 @@
 """Written by AI on 2026.10.16 by model gpt-6.1-sol.
 
-Score the built land-value raster against four held-out official valuations.
-Each test scales predictions to the observed total over the valued units. The
-production result retains its country-wide component shares; a separate local
-normalisation reproduces the research test's half-and-half comparison.
+Score the production land raster on eight frozen official valuation tests.
+Each test scales predictions to the observed total over its valued units. US
+counties and tracts use the study's even-state hold-out without refitting.
 
     devenv shell -- python -m checks.land_value
 """
+import argparse
 import csv
 import json
+from pathlib import Path
 
 import fiona
 import numpy as np
-import rasterio
 from rasterio.features import rasterize
-from rasterio.windows import from_bounds
 from shapely.geometry import shape
 
 from layers.grid import ROOT
-from layers.land_value.allocation import allocate
+from checks.property_split import compare_layer, score_layer
 
 EXPERIMENTS = ROOT / 'data/experiments/land-value'
 BUILD = ROOT / 'data/build/land_value'
 REPORT = ROOT / 'data/checks/land_value.json'
-FABLE_MIX = '1/2 population x access^0.25 + 1/2 GDP v3'
 
 
 def read_rows(path):
@@ -40,56 +38,6 @@ def read_units(path, key):
             if identifier is not None and feature.geometry is not None:
                 units.setdefault(identifier, []).append(shape(dict(feature.geometry)))
     return units
-
-
-def score(predicted, actual):
-    predicted = predicted / predicted.sum() * actual.sum()
-    with np.errstate(divide='ignore'):
-        log_ratio = np.log(np.where(predicted > 0, predicted, np.nan) / actual)
-    return dict(misallocated_share=float(np.abs(predicted - actual).sum() / (2 * actual.sum())),
-                median_abs_log_ratio=float(np.nanmedian(np.abs(log_ratio))),
-                n_units=len(actual), empty_units=int((predicted == 0).sum()))
-
-
-def local_mix(population_weight, gdp):
-    """Use the production rule, with this test area's components normalised equally."""
-    return allocate(population_weight, gdp, np.ones(len(gdp), dtype='int32'),
-                    np.array([0.0, 1.0]), np.array([0.0, population_weight.sum()]),
-                    np.array([0.0, gdp.sum()])).astype('float64')
-
-
-def evaluate(label, units, actual_by_code, bounds, land_value, population_weight, gdp):
-    keys = [key for key in units if actual_by_code.get(key, 0) > 0]
-    actual = np.array([actual_by_code[key] for key in keys])
-    window = from_bounds(*bounds, land_value.transform).round_offsets().round_lengths()
-    labels = rasterize([(geometry, index + 1) for index, key in enumerate(keys)
-                        for geometry in units[key]],
-                       out_shape=(int(window.height), int(window.width)),
-                       transform=land_value.window_transform(window), fill=0, dtype='int32')
-
-    def sums(source):
-        values = source.read(1, window=window, masked=True).filled(0)
-        return np.bincount(labels.ravel(), weights=values.ravel(), minlength=len(keys) + 1)[1:]
-
-    built_values = sums(land_value)
-    population_values = sums(population_weight)
-    gdp_values = sums(gdp)
-    fable = json.loads((EXPERIMENTS / f'{label}_scores.json').read_text())
-    np.testing.assert_allclose(actual, [fable['per_unit'][key]['actual'] for key in keys], rtol=1e-12, atol=1e-3)
-    # The saved research vectors let us change density and GDP separately.
-    old_gdp = np.array([fable['per_unit'][key]['GDP v3 (workplace)'] for key in keys])
-    density_only = score(local_mix(population_values, old_gdp), actual)
-    scores = dict(fable=fable['scores'][FABLE_MIX],
-                  production_density_old_gdp_local_mix=density_only,
-                  production_local_mix=score(local_mix(population_values, gdp_values), actual),
-                  production_layer=score(built_values, actual))
-    report = dict(label=label, scores=scores, official_total=float(actual.sum()),
-                  predicted_total_usd=float(built_values.sum()),
-                  valued_units_without_geometry=[key for key in actual_by_code if key not in units],
-                  per_unit={key: dict(actual=float(actual[index]), land_value=float(built_values[index]))
-                            for index, key in enumerate(keys)})
-    print(json.dumps(dict(label=label, scores=scores), ensure_ascii=False), flush=True)
-    return report
 
 
 def nrw_units():
@@ -155,14 +103,33 @@ def denmark_units():
     return 'denmark_municipalities', units, values, (8.0, 54.5, 15.3, 57.8)
 
 
+LAND_TESTS = ('us_counties', 'us_tracts', 'nyc_districts', 'victoria_councils',
+              'bc_municipalities', 'nrw_municipalities', 'japan_municipalities',
+              'denmark_municipalities')
+
+
 def main():
-    with rasterio.open(BUILD / 'land_value.tif') as land_value, \
-            rasterio.open(BUILD / 'population_weight.tif') as population_weight, \
-            rasterio.open(ROOT / 'data/build/gdp/gdp.tif') as gdp:
-        results = [evaluate(*test(), land_value, population_weight, gdp)
-                   for test in (nrw_units, japan_units, us_units, denmark_units)]
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(json.dumps(dict(tests=results), indent=2, ensure_ascii=False) + '\n')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--before', type=Path, help='Previous production land raster')
+    parser.add_argument('--raster', type=Path, default=BUILD / 'land_value.tif')
+    parser.add_argument('--report', type=Path, default=REPORT)
+    arguments = parser.parse_args()
+    results = []
+    for name in LAND_TESTS:
+        result = (compare_layer(arguments.raster, arguments.before, name) if arguments.before else
+                  score_layer(arguments.raster, name))
+        results.append(result)
+        summary = ({period: result[period]['scores'] for period in ('before', 'after')}
+                   if arguments.before else result['scores'])
+        print(json.dumps(dict(test=name, **summary)), flush=True)
+    periods = ('before', 'after') if arguments.before else ('production',)
+    means = {period: float(np.mean([(result[period] if arguments.before else result)['scores']['misallocated_share']
+                                   for result in results])) for period in periods}
+    report = dict(tests=results, mean_misallocated_share=means,
+                  valuation_units='Frozen Fable split study; US even-state hold-out')
+    arguments.report.parent.mkdir(parents=True, exist_ok=True)
+    arguments.report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+    print(json.dumps(dict(mean_misallocated_share=means)), flush=True)
 
 
 if __name__ == '__main__':

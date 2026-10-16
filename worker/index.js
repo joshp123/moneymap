@@ -331,12 +331,12 @@ const page = `<!doctype html>
             color: white;
         }
 
-        #secondarycounter, #stopcounter, #billionairecounter, #billionairekey, #propertymethod {
+        #secondarycounter, #stopcounter, #billionairecounter {
             text-align: center;
         }
 
-        #propertymethod, #billionairekey {
-            font-size: smaller;
+        .howitworks {
+            margin-top: 1.5em;
         }
 
         @media (max-width: 400px) {
@@ -404,11 +404,10 @@ const page = `<!doctype html>
 <p id="stopcounter" hidden></p>
 <p id="secondarycounter"></p>
 <p id="billionairecounter" hidden></p>
-<p id="billionairekey" hidden></p>
-<p id="propertymethod" hidden>Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land is shared out by population, local density and GDP, and buildings by population, GDP and built-up volume.</p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
 <h2>Give me the data!</h2>
 <div id="table"></div>
+<p class="howitworks">How property value works: Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land follows population, local density, local income and GDP, and buildings follow population and GDP. <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Read the methodology before posting a screenshot on Twitter pwning me</a>.</p>
 <h2>Sources and credits</h2>
 <p>Based on <a href="https://www.tomforth.co.uk/circlepopulations/">Tom Forth's Population around a point tool and page</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>GDP, 2024: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">March 2026 release</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
@@ -438,9 +437,9 @@ var range = document.getElementById('range');
 var numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 function money(value) {
   if (value === null) return 'No population';
-  if (value >= 1e12) return '$' + (value / 1e12).toFixed(1) + ' trillion';
-  if (value >= 1e9) return '$' + (value / 1e9).toFixed(1) + ' billion';
-  if (value >= 1e6) return '$' + (value / 1e6).toFixed(1) + ' million';
+  if (value >= 1e12) return '$' + Number((value / 1e12).toPrecision(3)) + ' trillion';
+  if (value >= 1e9) return '$' + Number((value / 1e9).toPrecision(3)) + ' billion';
+  if (value >= 1e6) return '$' + Number((value / 1e6).toPrecision(3)) + ' million';
   return '$' + numberFormat.format(value);
 }
 // Forbes real-time net worths on each person's profile page, 16 October 2026.
@@ -458,7 +457,14 @@ var BILLIONAIRES = [
   ['Rihanna', 'Rihanna', 'Rihannas', 1.0e9],
 ];
 var CLOSEST_RATIO = 0.25, FURTHEST_RATIO = 10;
+function netWorth(billionaire) {
+  var billions = billionaire[3] / 1e9;
+  return ' ($' + (billions >= 10 ? numberFormat.format(Math.round(billions)) : billions.toFixed(1)) + 'bn)';
+}
 function howMany(ratio, billionaire) {
+  return howManyWithoutWorth(ratio, billionaire) + netWorth(billionaire);
+}
+function howManyWithoutWorth(ratio, billionaire) {
   var article = /^[AEIOU]/.test(billionaire[1]) ? 'an ' : 'a ';
   if (ratio < 0.3) return 'a quarter of ' + article + billionaire[1];
   if (ratio < 0.4) return 'a third of ' + article + billionaire[1];
@@ -477,15 +483,12 @@ function inBillionaires(value) {
     .slice(0, 3);
   if (!nearest.length) {
     var poorest = BILLIONAIRES[BILLIONAIRES.length - 1], richest = BILLIONAIRES[0];
-    return value < poorest[3] ? { text: "That's less than a quarter of a " + poorest[1] + '.', key: [poorest] }
-      : { text: "That's about " + numberFormat.format(Math.round(value / richest[3])) + ' ' + richest[2] + '.', key: [richest] };
+    return value < poorest[3] ? { text: "That's less than a quarter of a " + poorest[1] + netWorth(poorest) + '.' }
+      : { text: "That's about " + numberFormat.format(Math.round(value / richest[3])) + ' ' + richest[2] + netWorth(richest) + '.' };
   }
   var phrases = nearest.map(function (match) { return howMany(match.ratio, match.billionaire); });
   var text = "That's about " + (phrases.length > 1 ? phrases.slice(0, -1).join(', ') + ' or ' : '') + phrases[phrases.length - 1] + '.';
-  return { text: text, key: nearest.map(function (match) { return match.billionaire; }) };
-}
-function billionaireKey(billionaires) {
-  return billionaires.map(function (billionaire) { return billionaire[0] + ' ' + money(billionaire[3]); }).join(' · ');
+  return { text: text };
 }
 function perHead(value) {
   return value === null ? '' : '$' + numberFormat.format(value);
@@ -503,16 +506,13 @@ function renderResult() {
   document.getElementById('maincounter').textContent = lastResult ? (isProperty ? money(lastResult.land_value + lastResult.building_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
   var secondary = '';
   if (lastResult) {
-    if (isProperty) secondary = 'Land: ' + money(lastResult.land_value) + ' · Buildings: ' + money(lastResult.building_value);
+    if (isProperty) secondary = 'Land ' + money(lastResult.land_value) + ' · Buildings ' + money(lastResult.building_value);
     else secondary = (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person');
   }
   document.getElementById('secondarycounter').textContent = secondary;
   document.getElementById('billionairecounter').hidden = !isProperty || !lastResult;
   var scale = isProperty && lastResult ? inBillionaires(lastResult.land_value + lastResult.building_value) : null;
   document.getElementById('billionairecounter').textContent = scale ? scale.text : '';
-  document.getElementById('billionairekey').hidden = !scale;
-  document.getElementById('billionairekey').textContent = scale ? 'Net worth on 16 October 2026: ' + billionaireKey(scale.key) + ' (Forbes).' : '';
-  document.getElementById('propertymethod').hidden = !isProperty;
   document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
   document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
   renderTable();

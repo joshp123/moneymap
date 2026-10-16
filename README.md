@@ -1,4 +1,4 @@
-Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised and rewritten by model claude opus 5.5.
+Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised and rewritten by model claude opus 5.5; land and building split updated on 2026.10.17 by model gpt-6.1-sol.
 
 # moneymap
 
@@ -10,7 +10,7 @@ The page has three modes: population (with stops), GDP, and property value (land
 
 ## How good are the numbers?
 
-Rough. moneymap was built in about a day by Josh directing AI agents, with little human review. Population and stops come straight from open data. GDP, land and building values are estimates: official national and regional totals, spread over a 1 km grid by simple rules. In tests against official figures, 5% to 30% of the value lands in the wrong small area, and some places are much further out, such as Tokyo's centre for land and Manhattan's core for buildings.
+Rough. moneymap was built in about a day by Josh directing AI agents, with little human review. Population and stops come straight from open data. GDP, land and building values are estimates: official national and regional totals, spread over a 1 km grid by simple rules. In tests against official figures, 5% to 25% of GDP lands in the wrong small region; land and building errors reach 42% and 32% at US census-tract scale. Some places are much further out, such as Tokyo's centre for land and Manhattan's core for buildings.
 
 [How the numbers are calculated](docs/methodology.md) explains every number, the tests and the known errors, so that anyone can check the work and improve it.
 
@@ -18,21 +18,25 @@ Rough. moneymap was built in about a day by Josh directing AI agents, with littl
 
 Each data layer is one value per 30 arc-second grid cell, stored as tiles in cloud object storage (the Site's R2 bucket). One server script, the Worker, serves the page and `/api/circle`, which sums the cells whose centres lie inside the circle. Python builds the tiles locally from the source data.
 
+National land and building totals come from balance sheets or simple GDP-based models. Land is split equally between production GDP and residents weighted by local density^0.5 and local income². Density and income use the same exponential 40 km neighbourhood. Buildings follow 70% population share and 30% production GDP share. Both rules preserve every country's total: $239.24 trillion of land and $224.78 trillion of buildings worldwide.
+
+The October 17 split check reduced mean wrong-area share from 22.64% to 20.58% for land (eight tests) and from 19.91% to 18.23% for buildings (five tests). US tract-level land-share ordering improved, but county-level ordering worsened. Honolulu, St Louis, Detroit and Düsseldorf's centre remain problems; the [methodology](docs/methodology.md#known-problems-1) gives the figures.
+
 ```text
 worker/index.js           The website: page, circle API and authenticated tile sync endpoints
 layers/                   Builds each layer's tiles into data/layers/
   grid.py                 The shared grid, tile format and readers
   population.py           Population layer
   transit_stops.py        Bus, tram and rail stop layers
-  building_value.py       National building totals and the compared spatial weights
+  building_value.py       Building totals spread by population and GDP
   gdp/                    GDP layer
     cell_ownership.py     Which regional unit owns each cell
     building_weight.py    Non-residential building weight
     allocation.py         How a unit's GDP is spread over its cells
     build.py              Regional totals, allocation, tiles and conservation checks
   land_value/             Land value excluding buildings
-    density.py            Population density in a 40 km neighbourhood
-    allocation.py         Equal shares of density-weighted population and GDP
+    density.py            Population density and income in a 40 km neighbourhood
+    allocation.py         Equal shares of weighted residents and GDP
     build.py              Country targets, allocation, tiles and conservation checks
 sources/                  External data, extracted to the grid
   regional_gdp.py         Kummu admin-1 and official BEA, ONS, CBS and Eurostat GDP
@@ -49,12 +53,13 @@ checks/                   Evidence that the numbers are right
   circles.py              Compares the real Worker's answers with the grids
   land_value.py           Checks land against official held-out valuations
   building_value.py       Checks buildings and property against official valuations
+  property_split.py       Shared valuation sampling, scores and land-share checks
 deploy/
   build.sh                Builds the Sites artifact in dist/ and stamps the deployed commit
   validate-artifact.mjs   Checks the artifact is an ES module exporting default.fetch
   preview.mjs             Runs the real Worker locally, with data/ as the R2 bucket
   sync-tiles.mjs          Makes the Site's tiles match data/layers/
-research/                 Experiments the method came from; the build does not use them, but two checks read their outputs
+research/                 Experiments and frozen test inputs; not allocation code used by the build
 docs/                     Method and research notes
 data/                     Inputs and outputs; local only, not in git
 ```
@@ -64,14 +69,14 @@ data/                     Inputs and outputs; local only, not in git
 Tools come from `devenv.nix`; run commands from the repository root. Download these inputs first, under the names the code expects. The research notes sometimes use other names for the same files.
 
 - Kummu GDP: `data/raw/kummu/rast_gdpTot_1990_2024_30arcsec.tif` and `data/raw/research-gdp/polyg_adm1_gdp_perCapita_1990_2024.gpkg`.
-- GHSL, all 2025, 30 arc-seconds: `data/raw/ghspop/GHS_POP_E2025_GLOBE_R2023A_4326_30ss_V1_0.zip`, and in `data/raw/research-gdp/` the non-residential volume and surface `nres_v_30ss.zip` and `nres_s_30ss.zip`, and the total built volume `built_v_30ss.zip`.
+- GHSL, all 2025, 30 arc-seconds: `data/raw/ghspop/GHS_POP_E2025_GLOBE_R2023A_4326_30ss_V1_0.zip`, and in `data/raw/research-gdp/` the non-residential volume and surface `nres_v_30ss.zip` and `nres_s_30ss.zip`. Total built volume is no longer needed by the building layer.
 - US, in `data/raw/research-gdp/`: `cagdp1/CAGDP1__ALL_AREAS_2001_2024.csv`, `cagdp2/CAGDP2__ALL_AREAS_2001_2024.csv`, `county/cb_2024_us_county_500k.shp` and `county_500k.zip`. `sources.lodes_jobs` downloads the LODES `S000_JT00`, `S000_JT02` and crosswalk files into `data/raw/lodes/`, records the releases in `releases.json`, and builds the jobs-by-industry grid from those recorded releases.
 - UK, in `data/raw/research-gdp/`: `ons_small_area_gva_2023.xlsx` and the ONS 2011 LSOA boundaries as `lsoa/p*.geojson`. The loader downloads `scotland_dz2011.zip` and `ni_soa2011.zip` if missing.
 - Netherlands and Europe, in `data/raw/research-gdp/`: `coropplus_2024.geojson` and the Eurostat 2023 NUTS3 GDP as `nuts3_2023.json`, which the loader does not download. It downloads the CBS table (`cbs_gdp2023.json`) and the GISCO boundaries (`nuts3_2024_01m.geojson`) if missing.
 - Land, in `data/raw/land-value/`: `land_all.csv` (OECD Table 9B), `gdp_usd.json`, `gdp_lcu.json` and `wb_EN.URB.MCTY.TL.ZS.json` (World Bank GDP and big-city population), `un-gdp-usd.xlsx` (UN GDP) and `dgbas-table1-2024.xlsx` (Taiwan national wealth). Download URLs and Taiwan's exchange rate are in `sources.json` there.
 - Buildings, in `data/raw/building-value/`: `oecd-buildings.csv` (OECD Table 9B building stocks), `gdp-per-head-ppp.json` (World Bank GDP per head at purchasing power parity, used to compare national models) and `dgbas-gdp-2024.xlsx` (Taiwan GDP). Download URLs are in `sources.json` there.
 - Valuation checks: the held-out land valuations in `data/experiments/land-value/`, as listed in [the land research](docs/land-value-research.md), which the Victoria, British Columbia and US building checks reuse; NYC Department of Finance values and district boundaries in `data/raw/building-value/nyc/` (`market-values-by-district-2024.json`, `community-districts.geojson`); and the Amsterdam CBS grid in `data/raw/building-value/europe/`, downloaded if missing. Each folder has a `sources.json`.
-- The GDP and land checks also read outputs of the research scripts: `data/experiments/places/` from `research/gdp/places_eval.py`, and `data/experiments/land-value/*_scores.json` and `nrw_official_grid.npz` from `research/land-value/`. The build does not need them.
+- The GDP checks read `data/experiments/places/` from `research/gdp/places_eval.py`. Land, building and split checks use frozen country-cell coordinates and cell-to-valuation-unit links in `data/experiments/split/{cells_*,units_*}.npz`, written by `research/split/extract_cells.py` and `research/split/units.py`. They sample the production rasters, not the experiment's stored candidate predictions. The build does not need these test files.
 
 ```sh
 nix shell nixpkgs#duckdb -c duckdb < sources/overture_places.sql
@@ -85,7 +90,6 @@ devenv shell -- python -m layers.building_value
 devenv shell -- python -m checks.holdouts
 devenv shell -- python -m checks.land_value
 devenv shell -- python -m checks.building_value
-devenv shell -- python -m checks.building_value --candidates
 devenv shell -- node deploy/preview.mjs
 # In another shell, while the preview runs:
 devenv shell -- python -m checks.circles
@@ -94,6 +98,17 @@ devenv shell -- python -m checks.circles
 Builders write `data/layers/<layer>/<tile row>/<tile column>.bin` and reports in `data/build/`; checks write `data/checks/`. A builder will not overwrite an existing layer: move it aside first. The preview runs the real Worker at http://127.0.0.1:8787 with `data/` standing in for the R2 bucket. Deployment is in [AGENTS.md](AGENTS.md).
 
 The land and building builds each write a `country_totals.csv` and `conservation.json` under `data/build/<layer>/`, with every country's target, source, data year and any GDP conversion reference. The building report also records the national model's leave-one-out scores.
+
+To compare a rebuild with rasters preserved before it:
+
+```sh
+devenv shell -- python -m checks.land_value --before data/build/land_value-before-split/land_value.tif
+devenv shell -- python -m checks.building_value --before data/build/building_value-before-split/building_value.tif
+devenv shell -- python -m checks.property_split --before-land data/build/land_value-before-split/land_value.tif --before-buildings data/build/building_value-before-split/building_value.tif
+devenv shell -- python research/smoke/land_share_vs_fhfa.py --report data/checks/fhfa-after-split.json
+```
+
+The US land and building scores retain the split study's held-out even-numbered states in the contiguous US. The FHFA smoke test separately checks all 2,436 counties with usable residential land shares. These measure residential value, not commercial property.
 
 ## Licence and credits
 

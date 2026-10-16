@@ -11,6 +11,7 @@ Start the preview first (node deploy/preview.mjs), or pass --origin for the
 live Site. To see what a method change does, keep data/checks/circles.json
 from before the change and pass it with --compare. Campus radii below the
 API minimum use the corresponding cumulative row from a 3 km query.
+For a land/building allocation change, add --changed-property --unchanged-gdp.
 
     devenv shell -- python -m checks.circles
 """
@@ -54,6 +55,10 @@ CIRCLES = [
     ('Cologne cathedral', 50.9413, 6.9578, 3), ('Cologne cathedral', 50.9413, 6.9578, 10),
     ('Düsseldorf', 51.2254, 6.7793, 10), ('Gelsenkirchen', 51.5177, 7.0857, 10),
     ('Sydney', -33.8688, 151.2093, 10),
+    ('Midtown', 40.7549, -73.9840, 3),
+    ('Middlesbrough', 54.5742, -1.2350, 10),
+    ('Santa Clara', 37.3707, -121.9638, 10),
+    ('Detroit', 42.3314, -83.0458, 10),
 ]
 # Bus, tram and rail stops from Tom Forth's tool, for comparison only.
 TOM_FORTH_STOPS = {'Amsterdam': [696, 345, 33], 'Rotterdam': [11622, 1036, 180]}
@@ -109,8 +114,9 @@ def assert_matches(actual, expected, where):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--origin', default='http://127.0.0.1:8787')
-    parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare GDP, land, population and stops')
+    parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare totals')
     parser.add_argument('--unchanged-gdp', action='store_true', help='Also require GDP to match --compare')
+    parser.add_argument('--changed-property', action='store_true', help='Allow land and buildings to change with --compare')
     arguments = parser.parse_args()
     baseline = {}
     if arguments.compare:
@@ -141,12 +147,19 @@ def main():
             circle = dict(name=name, latitude=latitude, longitude=longitude, radius_km=radius,
                           **{key: result[key] for key in ('gdp', 'land_value', 'building_value', 'population', 'gdp_per_head', *STOP_LAYERS)},
                           property_value=result['land_value'] + result['building_value'],
+                          land_share=result['land_value'] / (result['land_value'] + result['building_value'])
+                          if result['land_value'] + result['building_value'] > 0 else None,
                           milliseconds=milliseconds)
             if (name, radius) in baseline:
                 previous = baseline[(name, radius)]
                 circle['previous_gdp'] = previous['gdp']
                 circle['gdp_change'] = result['gdp'] - previous['gdp']
-                unchanged_fields = ('population', 'land_value', *STOP_LAYERS, *(('gdp',) if arguments.unchanged_gdp else ()))
+                for field in ('land_value', 'building_value', 'property_value', 'land_share'):
+                    if field in previous:
+                        circle[f'previous_{field}'] = previous[field]
+                unchanged_fields = ('population', *STOP_LAYERS,
+                                    *(('land_value',) if not arguments.changed_property else ()),
+                                    *(('gdp',) if arguments.unchanged_gdp else ()))
                 for field in unchanged_fields:
                     if field in previous:
                         np.testing.assert_allclose(result[field], previous[field], rtol=1e-12, atol=1e-3,
