@@ -1,7 +1,7 @@
 // Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude opus 5.5.
 // Makes the Site's tiles match data/layers/: uploads new and changed tiles, then deletes tiles that no longer exist locally.
 //   node deploy/sync-tiles.mjs <site origin> [layer ...] [--dry-run]
-// Layers default to all five. --dry-run lists the remote tiles and reports what would change, without changing anything.
+// Layers default to all of them. --dry-run lists the remote tiles and reports what would change, without changing anything.
 // Enter one JSON line on hidden stdin: {"uploadToken": "..."}, plus "siteAccessToken" for a private Site.
 // A tile is unchanged when R2's etag, the MD5 of its bytes, equals the MD5 of the local file.
 import { createHash } from 'node:crypto';
@@ -9,7 +9,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops'];
+const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value'];
 const TILE_BYTES = 120 * 120 * 4;
 const dataDirectory = resolve(import.meta.dirname, '../data');
 const [originArgument, ...rest] = process.argv.slice(2);
