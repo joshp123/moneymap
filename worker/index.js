@@ -8,7 +8,7 @@ const EARTH_RADIUS_KM = 6371.0088;
 const RADIANS = Math.PI / 180;
 const TILE_CELLS = GRID.tileSize ** 2;
 const TILE_BYTES = TILE_CELLS * 4;
-const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops'];
+const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value'];
 
 function circleParameters(searchParams) {
   const values = ['lat', 'long', 'distance_km'].map(name => {
@@ -23,8 +23,8 @@ function circleParameters(searchParams) {
   return { latitude, longitude, radius };
 }
 
-function totals(gdp, population, busStops, tramStops, railStops) {
-  return { gdp, population, gdp_per_head: population > 0 ? gdp / population : null,
+function totals(gdp, population, busStops, tramStops, railStops, landValue) {
+  return { gdp, population, land_value: landValue, gdp_per_head: population > 0 ? gdp / population : null,
     bus_stops: Math.round(busStops), tram_stops: Math.round(tramStops), rail_stops: Math.round(railStops) };
 }
 
@@ -44,6 +44,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
   const busStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const tramStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const railStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
+  const landValueByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const tileCoordinates = [];
   for (let tileRow = Math.floor(firstRow / GRID.tileSize); tileRow <= Math.floor(lastRow / GRID.tileSize); tileRow++) {
     for (let tileColumn = Math.floor(firstColumn / GRID.tileSize); tileColumn <= Math.floor(lastColumn / GRID.tileSize); tileColumn++) {
@@ -59,7 +60,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
         if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${layer}/${tileRow}/${tileColumn}`);
         return new DataView(bytes);
       }));
-      const [gdpValues, populationValues, busStopValues, tramStopValues, railStopValues] = layers;
+      const [gdpValues, populationValues, busStopValues, tramStopValues, railStopValues, landValues] = layers;
       if (layers.every(layer => layer === null)) return;
       const rowStart = tileRow * GRID.tileSize;
       const columnStart = tileColumn * GRID.tileSize;
@@ -74,7 +75,8 @@ async function circle(bucket, { latitude, longitude, radius }) {
           const busStops = busStopValues ? busStopValues.getFloat32(cellIndex * 4, true) : 0;
           const tramStops = tramStopValues ? tramStopValues.getFloat32(cellIndex * 4, true) : 0;
           const railStops = railStopValues ? railStopValues.getFloat32(cellIndex * 4, true) : 0;
-          if (gdp === 0 && population === 0 && busStops === 0 && tramStops === 0 && railStops === 0) continue;
+          const landValue = landValues ? landValues.getFloat32(cellIndex * 4, true) : 0;
+          if (gdp === 0 && population === 0 && busStops === 0 && tramStops === 0 && railStops === 0 && landValue === 0) continue;
           const cellLongitude = GRID.west + (column + 0.5) * GRID.pixelWidth;
           const haversine = latitudeDistance + cosineProduct * Math.sin((cellLongitude - longitude) * RADIANS / 2) ** 2;
           const distance = 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.min(1, haversine)));
@@ -85,6 +87,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
             busStopsByKilometre[kilometre] += busStops;
             tramStopsByKilometre[kilometre] += tramStops;
             railStopsByKilometre[kilometre] += railStops;
+            landValueByKilometre[kilometre] += landValue;
           }
         }
       }
@@ -95,6 +98,7 @@ async function circle(bucket, { latitude, longitude, radius }) {
   let busStops = busStopsByKilometre[0];
   let tramStops = tramStopsByKilometre[0];
   let railStops = railStopsByKilometre[0];
+  let landValue = landValueByKilometre[0];
   const cumulative = [];
   for (let kilometre = 1; kilometre <= Math.ceil(radius); kilometre++) {
     gdp += gdpByKilometre[kilometre];
@@ -102,9 +106,10 @@ async function circle(bucket, { latitude, longitude, radius }) {
     busStops += busStopsByKilometre[kilometre];
     tramStops += tramStopsByKilometre[kilometre];
     railStops += railStopsByKilometre[kilometre];
-    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population, busStops, tramStops, railStops) });
+    landValue += landValueByKilometre[kilometre];
+    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population, busStops, tramStops, railStops, landValue) });
   }
-  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops), cumulative };
+  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops, landValue), cumulative };
 }
 
 // deploy/sync-tiles.mjs lists, writes and deletes one layer's tiles here. Without the token these paths do not exist.
@@ -379,8 +384,9 @@ const page = `<!doctype html>
 <div class="mode-switch" role="group" aria-label="Display">
 <button type="button" id="populationmode" aria-pressed="true">Population</button>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
+<button type="button" id="landmode" aria-pressed="false">Land value</button>
 </div>
-<p style="text-align:center">GDP and population within a distance, from any point in the world.</p>
+<p style="text-align:center">Population, GDP and land value within a distance, from any point in the world.</p>
 <p style="text-align:center">Select a radius and click on the map.</p>
 <p style="text-align:center"><input type="range" id="range" min="3" value="5" max="100" step="1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<label for="range" id="rangelabel">5</label> km.</p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
@@ -399,6 +405,7 @@ const page = `<!doctype html>
 <p>Workplace places: <a href="https://overturemaps.org/">Overture Maps Foundation</a>, September 2026 (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a> and <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>).</p>
 <p>US workplace jobs: US Census Bureau, <a href="https://lehd.ces.census.gov/data/lodes/LODES8/">LEHD Origin-Destination Employment Statistics</a> (public domain).</p>
 <p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
+<p>Land value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
@@ -408,7 +415,7 @@ var selectedPoint = null;
 var pendingRequest = null;
 var lastResult = null;
 var params = new URLSearchParams(location.search);
-var mode = params.get('mode') === 'gdp' ? 'gdp' : 'population';
+var mode = ['gdp', 'land'].includes(params.get('mode')) ? params.get('mode') : 'population';
 var range = document.getElementById('range');
 var numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 function money(value) {
@@ -423,14 +430,22 @@ function perHead(value) {
 }
 function renderResult() {
   var isGDP = mode === 'gdp';
-  document.getElementById('heading').textContent = isGDP ? 'GDP around a point' : 'Population around a point';
-  document.title = 'moneymap: ' + (isGDP ? 'GDP' : 'population') + ' around a point';
-  document.getElementById('populationmode').setAttribute('aria-pressed', String(!isGDP));
+  var isLand = mode === 'land';
+  var heading = isLand ? 'Land value' : isGDP ? 'GDP' : 'Population';
+  document.getElementById('heading').textContent = heading + ' around a point';
+  document.title = 'moneymap: ' + (isGDP ? 'GDP' : heading.toLowerCase()) + ' around a point';
+  document.getElementById('populationmode').setAttribute('aria-pressed', String(mode === 'population'));
   document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
-  document.getElementById('resultlabel').textContent = isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
-  document.getElementById('maincounter').textContent = lastResult ? (isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
-  document.getElementById('secondarycounter').textContent = lastResult ? (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person') : '';
-  document.getElementById('stopcounter').hidden = isGDP || !lastResult;
+  document.getElementById('landmode').setAttribute('aria-pressed', String(isLand));
+  document.getElementById('resultlabel').textContent = isLand ? 'Land value within circle (2024, US dollars, excluding buildings):' : isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
+  document.getElementById('maincounter').textContent = lastResult ? (isLand ? money(lastResult.land_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
+  var secondary = '';
+  if (lastResult) {
+    if (isLand) secondary = 'Population in 2025: ' + numberFormat.format(lastResult.population) + ' · GDP in 2024: ' + money(lastResult.gdp);
+    else secondary = (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person');
+  }
+  document.getElementById('secondarycounter').textContent = secondary;
+  document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
   document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
   renderTable();
 }
@@ -440,22 +455,24 @@ function renderTable() {
     return;
   }
   var showStops = mode === 'population';
-  var tableHTML = '<table' + (showStops ? ' class="population-table"' : '') + '><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th>' + (showStops ? '<th>Bus stops</th><th>Tram stops</th><th>Metro and train stops</th>' : '') + '</tr></thead><tbody>';
+  var showLand = mode === 'land';
+  var tableHTML = '<table' + (showStops ? ' class="population-table"' : '') + '><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th>' + (showLand ? '<th>Land value</th>' : '') + (showStops ? '<th>Bus stops</th><th>Tram stops</th><th>Metro and train stops</th>' : '') + '</tr></thead><tbody>';
   lastResult.cumulative.forEach(function (row) {
-    tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td>' + (showStops ? '<td>' + numberFormat.format(row.bus_stops) + '</td><td>' + numberFormat.format(row.tram_stops) + '</td><td>' + numberFormat.format(row.rail_stops) + '</td>' : '') + '</tr>';
+    tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td>' + (showLand ? '<td>' + money(row.land_value) + '</td>' : '') + (showStops ? '<td>' + numberFormat.format(row.bus_stops) + '</td><td>' + numberFormat.format(row.tram_stops) + '</td><td>' + numberFormat.format(row.rail_stops) + '</td>' : '') + '</tr>';
   });
   document.getElementById('table').innerHTML = tableHTML + '</tbody></table>';
 }
 function changeMode(nextMode) {
   mode = nextMode;
   var url = new URL(location.href);
-  if (mode === 'gdp') url.searchParams.set('mode', 'gdp');
+  if (mode !== 'population') url.searchParams.set('mode', mode);
   else url.searchParams.delete('mode');
   history.replaceState({}, '', url);
   renderResult();
 }
 document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
 document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
+document.getElementById('landmode').addEventListener('click', function () { changeMode('land'); });
 renderResult();
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -479,7 +496,7 @@ var reloadControl = L.Control.extend({
       renderResult();
       document.getElementById('table').textContent = '';
       document.getElementById('status').textContent = 'Click on the map to calculate.';
-      history.replaceState({}, '', location.pathname + (mode === 'gdp' ? '?mode=gdp' : ''));
+      history.replaceState({}, '', location.pathname + (mode === 'population' ? '' : '?mode=' + mode));
     });
     return container;
   }
@@ -500,7 +517,7 @@ async function requestData(latitude, longitude) {
   document.getElementById('table').textContent = '';
   document.getElementById('status').textContent = 'Calculating…';
   var params = new URLSearchParams({ lat: latitude.toFixed(5), long: longitude.toFixed(5), distance_km: range.value, zoom: map.getZoom() });
-  if (mode === 'gdp') params.set('mode', 'gdp');
+  if (mode !== 'population') params.set('mode', mode);
   history.replaceState({}, '', '?' + params);
   try {
     var response = await fetch('/api/circle?' + params, { signal: controller.signal });

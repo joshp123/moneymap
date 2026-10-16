@@ -3,8 +3,9 @@
 Check the real Worker's circle API against the grids it should reproduce. For
 each named circle, every total and every cumulative kilometre row must match a
 direct sum over cell centres within that distance: GDP from the built GDP grid,
-population from GHS-POP and stops from the per-cell Parquet counts. None of
-these reads a tile, so the check covers the tiles, their upload and the Worker.
+population from GHS-POP, land value from its built grid, and stops from the
+per-cell Parquet counts. None of these reads a tile, so the check covers the
+tiles, their upload and the Worker.
 
 Start the preview first (node deploy/preview.mjs), or pass --origin for the
 live Site. To see what a method change does, keep data/checks/circles.json
@@ -30,6 +31,7 @@ from layers.grid import (EARTH_RADIUS_KM, ROOT, SparseCellCounts, bounding_windo
 from layers.transit_stops import EXPECTED_TOTALS as STOP_LAYERS, STOPS_PER_CELL
 
 REPORT = ROOT / 'data/checks/circles.json'
+LAND_VALUE_RASTER = ROOT / 'data/build/land_value/land_value.tif'
 CIRCLES = [
     ('Midtown and Lower Manhattan', 40.73756, -73.99429, 6),
     ('Bank', 51.5133, -0.0886, 3), ('Canary Wharf', 51.5054, -0.0235, 3),
@@ -48,6 +50,9 @@ CIRCLES = [
     ('Nvidia, Santa Clara', 37.3707, -121.9638, 1), ('Nvidia, Santa Clara', 37.3707, -121.9638, 2),
     ('Microsoft, Redmond', 47.6423, -122.1368, 1), ('Microsoft, Redmond', 47.6423, -122.1368, 3),
     ('Amazon, South Lake Union', 47.6223, -122.3365, 2),
+    ('Cologne cathedral', 50.9413, 6.9578, 3), ('Cologne cathedral', 50.9413, 6.9578, 10),
+    ('Düsseldorf', 51.2254, 6.7793, 10), ('Gelsenkirchen', 51.5177, 7.0857, 10),
+    ('Sydney', -33.8688, 151.2093, 10),
 ]
 # Bus, tram and rail stops from Tom Forth's tool, for comparison only.
 TOM_FORTH_STOPS = {'Amsterdam': [696, 345, 33], 'Rotterdam': [11622, 1036, 180]}
@@ -104,6 +109,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--origin', default='http://127.0.0.1:8787')
     parser.add_argument('--compare', type=Path, help='Earlier circles.json to compare GDP, population and stops')
+    parser.add_argument('--unchanged-gdp', action='store_true', help='Also require GDP to match --compare')
     arguments = parser.parse_args()
     baseline = {}
     if arguments.compare:
@@ -112,12 +118,14 @@ def main():
     stops = SparseCellCounts(STOPS_PER_CELL, STOP_LAYERS)
     report = {'origin': arguments.origin, 'circles': [], 'timings': []}
     kummu_gdp, population = open_kummu_gdp_and_population()
-    with kummu_gdp, population, rasterio.open(GDP_BUILD_DIRECTORY / 'gdp.tif') as gdp:
+    with kummu_gdp, population, rasterio.open(GDP_BUILD_DIRECTORY / 'gdp.tif') as gdp, \
+            rasterio.open(LAND_VALUE_RASTER) as land_value:
         for name, latitude, longitude, radius in CIRCLES:
             query_radius = max(3, radius)
             result, milliseconds = query(arguments.origin, latitude, longitude, query_radius)
             window, distances = cell_distances_km(gdp, latitude, longitude, query_radius)
             planes = dict(gdp=read_window_zero_filled(gdp, 1, window),
+                          land_value=read_window_zero_filled(land_value, 1, window),
                           population=read_window_zero_filled(population, 1, window),
                           **dict(zip(STOP_LAYERS, stops.window(window))))
             expected_rows, expected_total = expected_circle(planes, distances, query_radius)
@@ -128,13 +136,14 @@ def main():
             if radius < query_radius:
                 result = next(row for row in result['cumulative'] if row['distance_km'] == radius)
             circle = dict(name=name, latitude=latitude, longitude=longitude, radius_km=radius,
-                          **{key: result[key] for key in ('gdp', 'population', 'gdp_per_head', *STOP_LAYERS)},
+                          **{key: result[key] for key in ('gdp', 'land_value', 'population', 'gdp_per_head', *STOP_LAYERS)},
                           milliseconds=milliseconds)
             if (name, radius) in baseline:
                 previous = baseline[(name, radius)]
                 circle['previous_gdp'] = previous['gdp']
                 circle['gdp_change'] = result['gdp'] - previous['gdp']
-                for field in ('population', *STOP_LAYERS):
+                unchanged_fields = ('population', *STOP_LAYERS, *(('gdp',) if arguments.unchanged_gdp else ()))
+                for field in unchanged_fields:
                     if field in previous:
                         np.testing.assert_allclose(result[field], previous[field], rtol=1e-12, atol=1e-3,
                                                    err_msg=f'{name} changed {field}')
