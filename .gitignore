@@ -1,0 +1,8 @@
+data/
+.openai/local/
+node_modules/
+.devenv/
+.direnv/
+dist/
+__pycache__/
+.claude/
