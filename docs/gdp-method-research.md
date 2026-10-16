@@ -89,3 +89,21 @@ Claude's change: for "elsewhere", use Kummu's reported admin-1 units, not its ma
 1. Hold-out by level: build with control totals one level coarser and score against finer official units. Measures: misallocated share; median |log(predicted ÷ actual)|.
 2. Named places: circles at Bank, Canary Wharf, Heathrow, Midtown, Zuidas, Schiphol, Maasvlakte against official totals of the units inside.
 3. Conservation: every unit and country total reproduced; global total stays $196.88 trillion.
+
+## Experiment: Overture places as a workplace proxy
+
+Written by AI on 2026.10.16 by model claude opus 5.5 (research subagent). Code in `research/gdp/places_*.py`; outputs in `data/experiments/places/`.
+
+Overture places release 2026-09-23.1: 80.5 million open places in 5.9 million cells (`scripts/extract_places.sql`, `data/raw/overture/places_per_cell.parquet`). "Workplace" places (13.9 million): office, finance, legal, professional, real estate, media, design, technical, telecoms, business-to-business (not agriculture), industrial, government offices, education offices, research institutes; list fixed before scoring. Licence CDLA Permissive 2.0 and Apache 2.0; credit "Overture Maps Foundation, overturemaps.org".
+
+Share of GDP in the wrong unit (median |log ratio|), same production control totals:
+
+| Weighting | US county in state | UK MSOA in LA | EU NUTS3 in NUTS2 | Brazil municipality in state |
+|---|---|---|---|---|
+| Population only | 17.35% (0.420) | 39.47% (0.669) | 9.87% (0.139) | 19.62% (0.545) |
+| ½ pop + ½ q (v2) | 13.95% (0.258) | 27.86% (0.453) | 9.48% (0.134) | 18.64% (0.272) |
+| ⅓ pop, ⅓ q, ⅓ workplace places | **11.58% (0.239)** | **24.66% (0.410)** | 7.46% (0.104) | **16.59% (0.266)** |
+
+The ⅓ mix beats v2 in 49 of 50 US states, 265 of 316 UK local authorities, 192 of 232 EU NUTS2 regions and 18 of 26 Brazilian states. Circles (billions, 2021 international dollars), v2 → ⅓ mix: Midtown/Lower Manhattan 6 km 785 → 882; Tokyo Marunouchi 3 km 86 → 137; Bank 3 km 346 → 346; Zuidas 30 → 34; Schiphol 8 → 7; La Défense 92 → 87. Manhattan's share of New York State: 11.0% → 17.1% (official 43.4%).
+
+Risk: workplace-place coverage in the tested countries is 3.9 (Brazil) to 16.8 (Germany) per 1,000 people; Japan 2.2, India 0.6, China 0.01. Claude's rule: use the places term only in control units with at least 3.9 workplace places per 1,000 residents (the lowest validated coverage); elsewhere keep ½ pop + ½ q.
