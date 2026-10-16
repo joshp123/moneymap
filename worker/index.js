@@ -335,6 +335,25 @@ const page = `<!doctype html>
             text-align: center;
         }
 
+        .methodology-note {
+            background: rgba(255, 255, 255, 0.92);
+            padding: 3px 7px;
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .methodology-note a {
+            color: #183551;
+        }
+
+        @media (max-width: 500px) {
+            .leaflet-bottom.leaflet-left .methodology-note {
+                margin-bottom: 24px;
+                font-size: 12px;
+            }
+        }
+
         .howitworks {
             margin-top: 1.5em;
         }
@@ -407,7 +426,7 @@ const page = `<!doctype html>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
 <h2>Give me the data!</h2>
 <div id="table"></div>
-<p class="howitworks">How property value works: Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land follows population, local density, local income and GDP, and buildings follow population and GDP. <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Read the methodology before posting a screenshot on Twitter pwning me</a>.</p>
+<p class="howitworks">How property value works: Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land follows population, local density, local income and GDP, and buildings follow population and GDP. <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Full methodology</a>.</p>
 <h2>Sources and credits</h2>
 <p>Based on <a href="https://www.tomforth.co.uk/circlepopulations/">Tom Forth's Population around a point tool and page</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>GDP, 2024: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">March 2026 release</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
@@ -570,6 +589,14 @@ var reloadControl = L.Control.extend({
   }
 });
 map.addControl(new reloadControl());
+var methodologyNote = L.control({ position: 'bottomleft' });
+methodologyNote.onAdd = function () {
+  var note = L.DomUtil.create('div', 'leaflet-control methodology-note');
+  note.innerHTML = '<a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Read the methodology before posting a screenshot on Twitter pwning me</a>';
+  L.DomEvent.disableClickPropagation(note);
+  return note;
+};
+methodologyNote.addTo(map);
 function drawcircles(latitude, longitude, zoom) {
   CirclesLayer.clearLayers();
   L.circle([latitude, longitude], { radius: 1000 * Number(range.value) }).addTo(CirclesLayer);
