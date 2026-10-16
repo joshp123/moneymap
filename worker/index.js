@@ -8,6 +8,7 @@ const EARTH_RADIUS_KM = 6371.0088;
 const RADIANS = Math.PI / 180;
 const TILE_CELLS = GRID.tileSize ** 2;
 const TILE_BYTES = TILE_CELLS * 4;
+const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops'];
 
 function circleParameters(searchParams) {
   const values = ['lat', 'long', 'distance_km'].map(name => {
@@ -22,8 +23,9 @@ function circleParameters(searchParams) {
   return { latitude, longitude, radius };
 }
 
-function totals(gdp, population) {
-  return { gdp, population, gdp_per_head: population > 0 ? gdp / population : null };
+function totals(gdp, population, busStops, tramStops, railStops) {
+  return { gdp, population, gdp_per_head: population > 0 ? gdp / population : null,
+    bus_stops: Math.round(busStops), tram_stops: Math.round(tramStops), rail_stops: Math.round(railStops) };
 }
 
 async function circle(bucket, { latitude, longitude, radius }) {
@@ -39,6 +41,9 @@ async function circle(bucket, { latitude, longitude, radius }) {
   const lastColumn = Math.min(GRID.width - 1, Math.floor(((reachesPole ? 180 : longitude + longitudeOffset) - GRID.west) / GRID.pixelWidth));
   const gdpByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const populationByKilometre = new Float64Array(Math.ceil(radius) + 1);
+  const busStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
+  const tramStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
+  const railStopsByKilometre = new Float64Array(Math.ceil(radius) + 1);
   const tileCoordinates = [];
   for (let tileRow = Math.floor(firstRow / GRID.tileSize); tileRow <= Math.floor(lastRow / GRID.tileSize); tileRow++) {
     for (let tileColumn = Math.floor(firstColumn / GRID.tileSize); tileColumn <= Math.floor(lastColumn / GRID.tileSize); tileColumn++) {
@@ -47,15 +52,15 @@ async function circle(bucket, { latitude, longitude, radius }) {
   }
   for (let batchStart = 0; batchStart < tileCoordinates.length; batchStart += 16) {
     await Promise.all(tileCoordinates.slice(batchStart, batchStart + 16).map(async ([tileRow, tileColumn]) => {
-      const layers = await Promise.all(['gdp', 'population'].map(async layer => {
+      const layers = await Promise.all(LAYERS.map(async layer => {
         const object = await bucket.get(`layers/${layer}/${tileRow}/${tileColumn}.bin`);
         if (!object) return null;
         const bytes = await object.arrayBuffer();
         if (bytes.byteLength !== TILE_BYTES) throw new Error(`Invalid tile size: ${layer}/${tileRow}/${tileColumn}`);
         return new DataView(bytes);
       }));
-      const [gdpValues, populationValues] = layers;
-      if (!gdpValues && !populationValues) return;
+      const [gdpValues, populationValues, busStopValues, tramStopValues, railStopValues] = layers;
+      if (layers.every(layer => layer === null)) return;
       const rowStart = tileRow * GRID.tileSize;
       const columnStart = tileColumn * GRID.tileSize;
       for (let row = Math.max(firstRow, rowStart); row <= Math.min(lastRow, rowStart + GRID.tileSize - 1); row++) {
@@ -66,7 +71,10 @@ async function circle(bucket, { latitude, longitude, radius }) {
           const cellIndex = (row - rowStart) * GRID.tileSize + column - columnStart;
           const gdp = gdpValues ? gdpValues.getFloat32(cellIndex * 4, true) : 0;
           const population = populationValues ? populationValues.getFloat32(cellIndex * 4, true) : 0;
-          if (gdp === 0 && population === 0) continue;
+          const busStops = busStopValues ? busStopValues.getFloat32(cellIndex * 4, true) : 0;
+          const tramStops = tramStopValues ? tramStopValues.getFloat32(cellIndex * 4, true) : 0;
+          const railStops = railStopValues ? railStopValues.getFloat32(cellIndex * 4, true) : 0;
+          if (gdp === 0 && population === 0 && busStops === 0 && tramStops === 0 && railStops === 0) continue;
           const cellLongitude = GRID.west + (column + 0.5) * GRID.pixelWidth;
           const haversine = latitudeDistance + cosineProduct * Math.sin((cellLongitude - longitude) * RADIANS / 2) ** 2;
           const distance = 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.min(1, haversine)));
@@ -74,6 +82,9 @@ async function circle(bucket, { latitude, longitude, radius }) {
             const kilometre = Math.ceil(distance);
             gdpByKilometre[kilometre] += gdp;
             populationByKilometre[kilometre] += population;
+            busStopsByKilometre[kilometre] += busStops;
+            tramStopsByKilometre[kilometre] += tramStops;
+            railStopsByKilometre[kilometre] += railStops;
           }
         }
       }
@@ -81,13 +92,19 @@ async function circle(bucket, { latitude, longitude, radius }) {
   }
   let gdp = gdpByKilometre[0];
   let population = populationByKilometre[0];
+  let busStops = busStopsByKilometre[0];
+  let tramStops = tramStopsByKilometre[0];
+  let railStops = railStopsByKilometre[0];
   const cumulative = [];
   for (let kilometre = 1; kilometre <= Math.ceil(radius); kilometre++) {
     gdp += gdpByKilometre[kilometre];
     population += populationByKilometre[kilometre];
-    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population) });
+    busStops += busStopsByKilometre[kilometre];
+    tramStops += tramStopsByKilometre[kilometre];
+    railStops += railStopsByKilometre[kilometre];
+    if (kilometre <= radius) cumulative.push({ distance_km: kilometre, ...totals(gdp, population, busStops, tramStops, railStops) });
   }
-  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population), cumulative };
+  return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops), cumulative };
 }
 
 export default {
@@ -101,7 +118,7 @@ export default {
       await env.TILES.delete(oldTile[1]);
       return new Response(null, { status: 204 });
     }
-    const upload = /^\/__upload\/(layers\/(?:gdp|population)\/(\d+)\/(\d+)\.bin)$/.exec(url.pathname);
+    const upload = /^\/__upload\/(layers\/(?:gdp|population|bus_stops|tram_stops|rail_stops)\/(\d+)\/(\d+)\.bin)$/.exec(url.pathname);
     if (upload && (request.method === 'PUT' || request.method === 'HEAD')) {
       if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) {
         return new Response('Not found', { status: 404 });
@@ -223,15 +240,14 @@ const page = `<!doctype html>
             width: 4%;
         }
 
-        table {
-            width: 100%;
-            table-layout: fixed;
-            text-align: center;
-            border: 1px solid black;
+        #table {
+            overflow-x: auto;
         }
 
-        th:first-child {
-            width: 15%;
+        table {
+            width: 100%;
+            text-align: center;
+            border: 1px solid black;
         }
 
         th, td {
@@ -279,7 +295,7 @@ const page = `<!doctype html>
             color: white;
         }
 
-        #secondarycounter {
+        #secondarycounter, #stopcounter {
             text-align: center;
         }
 
@@ -287,6 +303,7 @@ const page = `<!doctype html>
             h1 { font-size: 1.6em; }
             #maincounter { font-size: 2.7em; }
             table { font-size: 12px; }
+            .population-table { font-size: 10px; }
         }
 
         ul,
@@ -337,6 +354,7 @@ const page = `<!doctype html>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
 <p id="resultlabel">Population within circle in 2025:</p>
 <p style="text-align:center" id="maincounter" aria-live="polite">--</p>
+<p id="stopcounter" hidden></p>
 <p id="secondarycounter"></p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
 <h2>Give me the data!</h2>
@@ -346,6 +364,8 @@ const page = `<!doctype html>
 <p>GDP, 2024: <a href="https://doi.org/10.1038/s41597-025-04487-x">Kummu et al. (2025)</a>, <a href="https://zenodo.org/records/18429133">March 2026 release</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Regional GDP: <a href="https://www.bea.gov/data/gdp/gdp-county-metro-and-other-areas">BEA (2024)</a>, <a href="https://www.ons.gov.uk/economy/grossdomesticproductgdp">ONS (2023)</a>, <a href="https://ec.europa.eu/eurostat/web/regions/database">Eurostat (2023)</a> and <a href="https://www.cbs.nl/en-gb/figures">CBS (2023)</a>. Built-up volume and surface, 2025: GHSL <a href="https://ghsl.jrc.ec.europa.eu/ghs_buV2023.php">GHS-BUILT-V</a> and <a href="https://ghsl.jrc.ec.europa.eu/ghs_buS2023.php">GHS-BUILT-S</a> R2023A, European Commission Joint Research Centre (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Population, 2025: <a href="https://ghsl.jrc.ec.europa.eu/ghs_pop2023.php">GHS-POP R2023A, European Commission Joint Research Centre</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
+<p>Workplace places: <a href="https://overturemaps.org/">Overture Maps Foundation</a>, September 2026 (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a> and <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>).</p>
+<p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>.</p>
 <script>
 var map = L.map('map').setView([20, 0], 2);
@@ -376,6 +396,21 @@ function renderResult() {
   document.getElementById('resultlabel').textContent = isGDP ? 'GDP within circle in 2024 (PPP, 2021 international dollars):' : 'Population within circle in 2025:';
   document.getElementById('maincounter').textContent = lastResult ? (isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
   document.getElementById('secondarycounter').textContent = lastResult ? (isGDP ? 'Population in 2025: ' + numberFormat.format(lastResult.population) : 'GDP in 2024: ' + money(lastResult.gdp)) + (lastResult.gdp_per_head === null ? '' : ' · ' + perHead(lastResult.gdp_per_head) + ' per person') : '';
+  document.getElementById('stopcounter').hidden = isGDP || !lastResult;
+  document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
+  renderTable();
+}
+function renderTable() {
+  if (!lastResult) {
+    document.getElementById('table').textContent = '';
+    return;
+  }
+  var showStops = mode === 'population';
+  var tableHTML = '<table' + (showStops ? ' class="population-table"' : '') + '><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th>' + (showStops ? '<th>Bus stops</th><th>Tram stops</th><th>Metro and train stops</th>' : '') + '</tr></thead><tbody>';
+  lastResult.cumulative.forEach(function (row) {
+    tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td>' + (showStops ? '<td>' + numberFormat.format(row.bus_stops) + '</td><td>' + numberFormat.format(row.tram_stops) + '</td><td>' + numberFormat.format(row.rail_stops) + '</td>' : '') + '</tr>';
+  });
+  document.getElementById('table').innerHTML = tableHTML + '</tbody></table>';
 }
 function changeMode(nextMode) {
   mode = nextMode;
@@ -440,11 +475,6 @@ async function requestData(latitude, longitude) {
     lastResult = result;
     renderResult();
     document.getElementById('status').textContent = '';
-    var tableHTML = '<table><thead><tr><th>Radius (km)</th><th>Population</th><th>GDP</th><th>GDP per head</th></tr></thead><tbody>';
-    result.cumulative.forEach(function (row) {
-      tableHTML += '<tr><td>' + row.distance_km + '</td><td>' + numberFormat.format(row.population) + '</td><td>' + money(row.gdp) + '</td><td>' + perHead(row.gdp_per_head) + '</td></tr>';
-    });
-    document.getElementById('table').innerHTML = tableHTML + '</tbody></table>';
   } catch (error) {
     if (error.name !== 'AbortError') document.getElementById('status').textContent = 'Could not calculate: ' + error.message;
   }
@@ -464,7 +494,7 @@ map.on('zoomend', function () {
 range.addEventListener('input', function () { document.getElementById('rangelabel').textContent = range.value; });
 range.addEventListener('change', function () {
   if (selectedPoint) {
-    drawcircles(selectedPoint[0], selectedPoint[1], map.getZoom());
+    drawcircles(selectedPoint[0], selectedPoint[1]);
     requestData(selectedPoint[0], selectedPoint[1]);
   }
 });

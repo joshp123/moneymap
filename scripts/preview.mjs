@@ -9,7 +9,7 @@ const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDirectory = resolve(projectDirectory, 'data');
 const port = Number(process.env.PORT || 8787);
 function tilePath(key) {
-  if (!/^layers\/(gdp|population)\/\d+\/\d+\.bin$/.test(key)) throw new Error('Invalid tile key');
+  if (!/^layers\/(gdp|population|bus_stops|tram_stops|rail_stops)\/\d+\/\d+\.bin$/.test(key)) throw new Error('Invalid tile key');
   return resolve(dataDirectory, key);
 }
 const env = {

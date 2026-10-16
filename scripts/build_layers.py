@@ -1,6 +1,6 @@
 """Written by AI on 2026.10.16 by model gpt-6.1-sol.
 
-Build GDP with official control totals and a fixed half population, half built-up weight.
+Build GDP with official controls, population, built-up volume and workplace places.
 """
 from collections import defaultdict
 from contextlib import ExitStack
@@ -18,9 +18,11 @@ from shapely.geometry import shape
 
 from build_tiles import ROOT, TILE_SIZE, open_sources, clean_window
 from gdp_controls import Control, load_controls
+from overture_grid import OvertureGrid
 
 RAW = ROOT / 'data/raw/research-gdp'
-BUILD = ROOT / 'data/gdp-v2'
+BUILD = ROOT / 'data/gdp-v3'
+WORKPLACE_COVERAGE_PER_THOUSAND = 3.9
 
 
 def open_zip_raster(path):
@@ -95,14 +97,29 @@ def grouped_sum(labels, values, count):
     return np.bincount(labels.ravel(), weights=values.ravel(), minlength=count + 1)
 
 
-def allocation(population, q, labels, totals, population_sums, q_sums, population_weight=0.5):
-    """Shared production allocation, also used for the state-to-county hold-out."""
+def places_coverage(population_sums, q_sums, workplace_sums):
+    return ((population_sums > 0) & (q_sums > 0) &
+            (workplace_sums * 1000 >= WORKPLACE_COVERAGE_PER_THOUSAND * population_sums))
+
+
+def allocation(population, q, labels, totals, population_sums, q_sums, population_weight=0.5,
+               *, workplace_places=None, workplace_sums=None):
+    """The same allocation runs in the global build and held-out comparisons."""
     pop_factor = np.divide(totals, population_sums, out=np.zeros_like(totals), where=population_sums > 0)
     q_factor = np.divide(totals, q_sums, out=np.zeros_like(totals), where=q_sums > 0)
     both = (population_sums > 0) & (q_sums > 0)
     pop_factor[both] *= population_weight
     q_factor[both] *= 1 - population_weight
-    return (population * pop_factor[labels] + q * q_factor[labels]).astype('<f4')
+    values = population * pop_factor[labels] + q * q_factor[labels]
+    if workplace_places is not None:
+        covered = places_coverage(population_sums, q_sums, workplace_sums)
+        pop_factor[covered] = totals[covered] / population_sums[covered] / 3
+        q_factor[covered] = totals[covered] / q_sums[covered] / 3
+        workplace_factor = np.divide(totals / 3, workplace_sums, out=np.zeros_like(totals),
+                                     where=covered)
+        values = (population * pop_factor[labels] + q * q_factor[labels] +
+                  workplace_places * workplace_factor[labels])
+    return values.astype('<f4')
 
 
 def raster_profile(grid, dtype):
@@ -133,8 +150,9 @@ def write_tiles(layer, values, row):
 
 def build():
     output = ROOT / 'data/layers'
-    if output.exists() and any(output.iterdir()):
-        raise RuntimeError('Move existing data/layers aside before rebuilding')
+    if (output/'gdp').exists() and any((output/'gdp').iterdir()):
+        raise RuntimeError('Move existing data/layers/gdp aside before rebuilding')
+    population_exists = (output/'population').exists()
     BUILD.mkdir(parents=True, exist_ok=True)
     base = reported_controls()
     official, official_sums = load_controls(RAW)
@@ -154,6 +172,7 @@ def build():
     base_totals = np.zeros(len(base)+1)
     population_sums = np.zeros(len(controls)+1)
     q_sums = np.zeros(len(controls)+1)
+    workplace_sums = np.zeros(len(controls)+1)
     cell_counts = np.zeros(len(controls)+1)
     source_population = source_gdp = 0.0
     coast_cells = official_gap_cells = 0
@@ -163,6 +182,8 @@ def build():
         volume = stack.enter_context(open_zip_raster(RAW / 'nres_v_30ss.zip'))
         surface = stack.enter_context(open_zip_raster(RAW / 'nres_s_30ss.zip'))
         offset = check_alignment(gdp, volume, surface)
+        places = OvertureGrid(ROOT/'data/raw/overture/places_per_cell.parquet',
+                              ['workplace_places'], gdp.width, gdp.height)
         labels_file = BUILD / 'control-ids.tif'
         with rasterio.open(labels_file, 'w', **raster_profile(gdp, 'uint32')) as labels_output:
             for window in strips(gdp):
@@ -195,6 +216,7 @@ def build():
                 labels_output.write(labels, 1, window=window)
                 population_sums += grouped_sum(labels, pop, len(controls))
                 q_sums += grouped_sum(labels, q, len(controls))
+                workplace_sums += grouped_sum(labels, places.window(window)[0], len(controls))
                 cell_counts += np.bincount(labels.ravel(), minlength=len(controls)+1)
                 source_population += pop.sum(dtype='float64')
                 source_gdp += old.sum(dtype='float64')
@@ -218,7 +240,8 @@ def build():
                 labels = labels_source.read(1, window=window)
                 pop = clean_window(population, 1, window)
                 q = shifted_q(volume, surface, window, gdp)
-                new_gdp = allocation(pop, q, labels, totals, population_sums, q_sums)
+                new_gdp = allocation(pop, q, labels, totals, population_sums, q_sums,
+                                     workplace_places=places.window(window)[0], workplace_sums=workplace_sums)
                 actual_totals += grouped_sum(labels, new_gdp, len(controls))
                 for unit_id, row, col in fallback_cells[int(window.row_off)]:
                     new_gdp[row-int(window.row_off), col] += np.float32(totals[unit_id])
@@ -226,23 +249,32 @@ def build():
                 built.write(new_gdp, 1, window=window)
                 for name, values in [('gdp', new_gdp), ('population', pop)]:
                     built_totals[name] += values.sum(dtype='float64')
-                    tile_counts[name] += write_tiles(name, values, int(window.row_off))
+                    if name != 'population' or not population_exists:
+                        tile_counts[name] += write_tiles(name, values, int(window.row_off))
                 if window.row_off % 2400 == 0: print(f'Layer tiles: row {window.row_off}', flush=True)
     np.testing.assert_allclose(actual_totals, totals, rtol=8e-8, atol=0.01)
     actual_countries = np.bincount(unit_countries, weights=actual_totals, minlength=len(countries)+1)
     np.testing.assert_allclose(actual_countries[1:], country_totals[1:], rtol=8e-8, atol=0.01)
     np.testing.assert_allclose(country_totals.sum(), source_gdp, rtol=1e-12)
+    tile_counts['population'] = len(list((output/'population').glob('*/*.bin')))
     tile_totals = {name: sum(np.fromfile(path, dtype='<f4').sum(dtype='float64') for path in (output/name).glob('*/*.bin')) for name in tile_counts}
     for name in tile_totals: np.testing.assert_allclose(tile_totals[name], built_totals[name], rtol=1e-12, atol=0.01)
     np.testing.assert_allclose(built_totals['population'], source_population, rtol=1e-12)
+    covered = places_coverage(population_sums, q_sums, workplace_sums)
     report = dict(source_gdp=source_gdp, source_population=source_population, built_totals=dict(built_totals),
+                  places_units=int(covered.sum()), places_gdp=float(totals[covered].sum()),
+                  places_gdp_share=float(totals[covered].sum()/totals.sum()),
+                  workplace_places_in_grid=float(places.totals['workplace_places']),
+                  workplace_places_unassigned=float(workplace_sums[0]),
                   tile_totals=tile_totals, tiles={name:dict(count=count, bytes=count*TILE_SIZE*TILE_SIZE*4) for name,count in tile_counts.items()},
                   built_grid_offset=offset, coastal_cells_assigned_nearest=coast_cells,
                   official_boundary_gap_cells=official_gap_cells,
                   fallback_units=sum(len(v) for v in fallback_cells.values()),
                   countries={c:dict(source=country_totals[i+1], built=actual_countries[i+1], official_sum=official_sums.get(c)) for i,c in enumerate(countries)},
                   units=[dict(country=c.country, code=c.code, name=c.name, source=c.source,
-                              official=c.value, target=totals[i+1], built=actual_totals[i+1], cells=int(cell_counts[i+1])) for i,c in enumerate(controls)])
+                              official=c.value, target=totals[i+1], built=actual_totals[i+1], cells=int(cell_counts[i+1]),
+                              population=population_sums[i+1], q=q_sums[i+1], workplace_places=workplace_sums[i+1],
+                              uses_places=bool(covered[i+1])) for i,c in enumerate(controls)])
     (BUILD/'conservation.json').write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps({key:value for key,value in report.items() if key not in ('countries','units')}, indent=2), flush=True)
 
