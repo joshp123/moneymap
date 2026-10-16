@@ -18,6 +18,8 @@ Rough. moneymap was built in about a day by Josh directing AI agents, with littl
 
 Each data layer is one value per 30 arc-second grid cell, stored as tiles in cloud object storage (the Site's R2 bucket). One server script, the Worker, serves the page and `/api/circle`, which sums the cells whose centres lie inside the circle. Python builds the tiles locally from the source data.
 
+The API also returns `place`: the nearest GeoNames `cities15000` point within 200 km, as `{name, country, distance_km}`, or `null`. Country names come from GeoNames `countryInfo.txt`. The Worker loads `data/places/cities.json` from R2 once per isolate and makes no third-party lookup calls. GeoNames is [CC BY 4.0](https://download.geonames.org/export/dump/).
+
 National land and building totals come from balance sheets or simple GDP-based models. Land is split equally between production GDP and residents weighted by local density^0.5 and local income². Density and income use the same exponential 40 km neighbourhood. Buildings follow 70% population share and 30% production GDP share. Both rules preserve every country's total: $239.24 trillion of land and $224.78 trillion of buildings worldwide.
 
 The October 17 split check reduced mean wrong-area share from 22.64% to 20.58% for land (eight tests) and from 19.91% to 18.23% for buildings (five tests). US tract-level land-share ordering improved, but county-level ordering worsened. Honolulu, St Louis, Detroit and Düsseldorf's centre remain problems; the [methodology](docs/methodology.md#known-problems-1) gives the figures.
@@ -48,6 +50,7 @@ sources/                  External data, extracted to the grid
   building_value.py       National building targets and model selection
   building_valuations.py  NYC official market land and building values
   european_property_values.py  Amsterdam residential WOZ diagnostic
+  geonames.py             Compact worldwide place-name gazetteer
 checks/                   Evidence that the numbers are right
   holdouts.py             Scores the GDP rule against official figures held out
   circles.py              Compares the real Worker's answers with the grids
@@ -58,7 +61,7 @@ deploy/
   build.sh                Builds the Sites artifact in dist/ and stamps the deployed commit
   validate-artifact.mjs   Checks the artifact is an ES module exporting default.fetch
   preview.mjs             Runs the real Worker locally, with data/ as the R2 bucket
-  sync-tiles.mjs          Makes the Site's tiles match data/layers/
+  sync-tiles.mjs          Syncs data/layers/ and places/cities.json
 research/                 Experiments and frozen test inputs; not allocation code used by the build
 docs/                     Method and research notes
 data/                     Inputs and outputs; local only, not in git
@@ -87,6 +90,7 @@ devenv shell -- python -m layers.transit_stops
 devenv shell -- python -m layers.gdp.build
 devenv shell -- python -m layers.land_value.build
 devenv shell -- python -m layers.building_value
+devenv shell -- python -m sources.geonames
 devenv shell -- python -m checks.holdouts
 devenv shell -- python -m checks.land_value
 devenv shell -- python -m checks.building_value
@@ -98,6 +102,8 @@ devenv shell -- python -m checks.circles
 Builders write `data/layers/<layer>/<tile row>/<tile column>.bin` and reports in `data/build/`; checks write `data/checks/`. A builder will not overwrite an existing layer: move it aside first. The preview runs the real Worker at http://127.0.0.1:8787 with `data/` standing in for the R2 bucket. Deployment is in [AGENTS.md](AGENTS.md).
 
 The land and building builds each write a `country_totals.csv` and `conservation.json` under `data/build/<layer>/`, with every country's target, source, data year and any GDP conversion reference. The building report also records the national model's leave-one-out scores.
+
+`sources.geonames` downloads `cities15000.zip` and `countryInfo.txt` from the [GeoNames dump](https://download.geonames.org/export/dump/) into `data/raw/geonames/` if missing. It writes compact `[name, country, latitude, longitude, population]` rows to `data/places/cities.json`. The default tile sync includes this file; selecting `places` syncs it alone, with the same MD5 comparison and hidden-stdin credentials. Deploy the updated Worker before its first upload. Until the file is present, `place` is `null`; the numeric results are unaffected.
 
 To compare a rebuild with rasters preserved before it:
 

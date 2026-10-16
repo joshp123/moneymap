@@ -1,7 +1,7 @@
 // Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude opus 5.5.
-// Makes the Site's tiles match data/layers/: uploads new and changed tiles, then deletes tiles that no longer exist locally.
-//   node deploy/sync-tiles.mjs <site origin> [layer ...] [--dry-run]
-// Layers default to all of them. --dry-run lists the remote tiles and reports what would change, without changing anything.
+// Syncs data/layers/ and places/cities.json: uploads changed files and deletes obsolete tiles.
+//   node deploy/sync-tiles.mjs <site origin> [layer|places ...] [--dry-run]
+// Defaults to all layers and places. --dry-run reports changes without applying them.
 // Enter one JSON line on hidden stdin: {"uploadToken": "..."}, plus "siteAccessToken" for a private Site.
 // A tile is unchanged when R2's etag, the MD5 of its bytes, equals the MD5 of the local file.
 import { createHash } from 'node:crypto';
@@ -10,19 +10,21 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
+const DATA_SETS = [...LAYERS, 'places'];
 const TILE_BYTES = 120 * 120 * 4;
 const dataDirectory = resolve(import.meta.dirname, '../data');
 const [originArgument, ...rest] = process.argv.slice(2);
 const dryRun = rest.includes('--dry-run');
-const selectedLayers = rest.filter(argument => argument !== '--dry-run');
-const layers = selectedLayers.length ? selectedLayers : LAYERS;
-if (!originArgument || layers.some(layer => !LAYERS.includes(layer))) {
-  throw new Error(`Usage: node deploy/sync-tiles.mjs <site origin> [${LAYERS.join('|')} ...] [--dry-run]`);
+const selectedDataSets = rest.filter(argument => argument !== '--dry-run');
+const dataSets = selectedDataSets.length ? selectedDataSets : DATA_SETS;
+if (!originArgument || dataSets.some(name => !DATA_SETS.includes(name))) {
+  throw new Error(`Usage: node deploy/sync-tiles.mjs <site origin> [${DATA_SETS.join('|')} ...] [--dry-run]`);
 }
 const origin = new URL(originArgument);
 if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('Expected an HTTP origin');
 
-async function localTileKeys(layer) {
+async function localDataKeys(layer) {
+  if (layer === 'places') return ['places/cities.json'];
   const keys = [];
   for (const row of await readdir(join(dataDirectory, 'layers', layer))) {
     if (!/^\d+$/.test(row)) continue;
@@ -86,20 +88,20 @@ async function request(path, method, body) {
 }
 
 async function remoteTileEtags(layer) {
-  const response = await request(`layers/${layer}/`, 'GET');
+  const response = await request(layer === 'places' ? 'places/' : `layers/${layer}/`, 'GET');
   if (!response.ok) throw new Error(`Listing ${layer}: ${response.status}. Is the current Worker deployed?`);
   return response.json();
 }
 
 // Plan every layer before changing anything, so a missing local layer stops the whole sync.
 const plans = [];
-for (const layer of layers) {
-  const [localKeys, remoteEtags] = await Promise.all([localTileKeys(layer), remoteTileEtags(layer)]);
+for (const layer of dataSets) {
+  const [localKeys, remoteEtags] = await Promise.all([localDataKeys(layer), remoteTileEtags(layer)]);
   const local = new Set(localKeys);
   const uploads = [];
   for (const key of localKeys) {
     const bytes = await readFile(join(dataDirectory, key));
-    if (bytes.length !== TILE_BYTES) throw new Error(`Unexpected tile size: ${key}`);
+    if (layer !== 'places' && bytes.length !== TILE_BYTES) throw new Error(`Unexpected tile size: ${key}`);
     if (remoteEtags[key] !== createHash('md5').update(bytes).digest('hex')) uploads.push(key);
   }
   const deletions = Object.keys(remoteEtags).filter(key => !local.has(key));

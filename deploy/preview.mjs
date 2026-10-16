@@ -14,7 +14,7 @@ const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const bucketDirectory = resolve(process.argv[2] || resolve(projectDirectory, 'data'));
 const port = Number(process.env.PORT || 8787);
 function objectPath(key) {
-  if (!/^layers\/[a-z_]+\/(\d+\/(\d+\.bin)?)?$/.test(key)) throw new Error(`Invalid key: ${key}`);
+  if (key !== 'places/cities.json' && !/^layers\/[a-z_]+\/(\d+\/(\d+\.bin)?)?$/.test(key)) throw new Error(`Invalid key: ${key}`);
   return resolve(bucketDirectory, key);
 }
 async function filesUnder(directory) {
@@ -26,7 +26,12 @@ async function filesUnder(directory) {
 }
 // R2 lists keys in lexicographic order, at most 1,000 at a time; its etag is the MD5 of the object.
 async function list({ prefix, cursor }) {
-  const keys = (await filesUnder(objectPath(prefix))).map(path => relative(bucketDirectory, path)).sort();
+  const keys = prefix === 'places/cities.json'
+    ? await readFile(objectPath(prefix)).then(() => [prefix]).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    })
+    : (await filesUnder(objectPath(prefix))).map(path => relative(bucketDirectory, path)).sort();
   const start = cursor ? keys.findIndex(key => key > cursor) : 0;
   const page = start === -1 ? [] : keys.slice(start, start + 1000);
   const objects = await Promise.all(page.map(async key => ({

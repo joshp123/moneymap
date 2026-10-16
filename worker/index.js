@@ -9,6 +9,38 @@ const RADIANS = Math.PI / 180;
 const TILE_CELLS = GRID.tileSize ** 2;
 const TILE_BYTES = TILE_CELLS * 4;
 const LAYERS = ['gdp', 'population', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
+const PLACES_KEY = 'places/cities.json';
+let placesPromise;
+
+async function nearestPlace(bucket, latitude, longitude) {
+  if (!placesPromise) {
+    placesPromise = (async () => {
+      const object = await bucket.get(PLACES_KEY);
+      if (!object) {
+        placesPromise = undefined;
+        return [];
+      }
+      return JSON.parse(new TextDecoder().decode(await object.arrayBuffer()));
+    })().catch(error => { placesPromise = undefined; throw error; });
+  }
+  const places = await placesPromise;
+  const latitudeRadians = latitude * RADIANS;
+  const maximumAngle = 200 / EARTH_RADIUS_KM;
+  let nearest = null;
+  let nearestHaversine = Math.sin(maximumAngle / 2) ** 2;
+  for (const place of places) {
+    const placeLatitude = place[2] * RADIANS;
+    if (Math.abs(placeLatitude - latitudeRadians) > maximumAngle) continue;
+    const haversine = Math.sin((placeLatitude - latitudeRadians) / 2) ** 2 +
+      Math.cos(latitudeRadians) * Math.cos(placeLatitude) * Math.sin((place[3] - longitude) * RADIANS / 2) ** 2;
+    if (haversine <= nearestHaversine) {
+      nearest = place;
+      nearestHaversine = haversine;
+    }
+  }
+  return nearest ? { name: nearest[0], country: nearest[1],
+    distance_km: 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(nearestHaversine)) } : null;
+}
 
 function circleParameters(searchParams) {
   const values = ['lat', 'long', 'distance_km'].map(name => {
@@ -117,13 +149,13 @@ async function circle(bucket, { latitude, longitude, radius }) {
   return { lat: latitude, long: longitude, distance_km: radius, ...totals(gdp, population, busStops, tramStops, railStops, landValue, buildingValue), cumulative };
 }
 
-// deploy/sync-tiles.mjs lists, writes and deletes one layer's tiles here. Without the token these paths do not exist.
+// deploy/sync-tiles.mjs lists, writes and deletes data here. Without the token these paths do not exist.
 // GET /__upload/layers/<layer>/ returns {key: etag}; R2's etag is the MD5 of the tile.
 // PUT and DELETE /__upload/layers/<layer>/<tileRow>/<tileColumn>.bin write or remove one tile.
 const TILE_SYNC_PATH = new RegExp(`^/__upload/(layers/(?:${LAYERS.join('|')})/)(?:(\\d+)/(\\d+)\\.bin)?$`);
 const notFound = () => new Response('Not found', { status: 404 });
 
-async function layerTileEtags(bucket, prefix) {
+async function objectEtags(bucket, prefix) {
   const etags = {};
   let cursor;
   do {
@@ -136,11 +168,25 @@ async function layerTileEtags(bucket, prefix) {
 
 async function handleTileSyncRequest(request, env, pathname) {
   if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) return notFound();
+  if (pathname === '/__upload/places/') {
+    if (request.method !== 'GET') return notFound();
+    const etags = await objectEtags(env.TILES, PLACES_KEY);
+    return Response.json(Object.fromEntries(Object.entries(etags).filter(([key]) => key === PLACES_KEY)));
+  }
+  if (pathname === `/__upload/${PLACES_KEY}`) {
+    if (request.method !== 'PUT') return notFound();
+    const bytes = await request.arrayBuffer();
+    try { JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { return new Response('Invalid place JSON', { status: 400 }); }
+    await env.TILES.put(PLACES_KEY, bytes);
+    placesPromise = undefined;
+    return new Response(null, { status: 201 });
+  }
   const match = TILE_SYNC_PATH.exec(pathname);
   if (!match) return notFound();
   const [, layerPrefix, tileRow, tileColumn] = match;
   if (tileRow === undefined) {
-    return request.method === 'GET' ? Response.json(await layerTileEtags(env.TILES, layerPrefix)) : notFound();
+    return request.method === 'GET' ? Response.json(await objectEtags(env.TILES, layerPrefix)) : notFound();
   }
   if (Number(tileRow) >= Math.ceil(GRID.height / GRID.tileSize) || Number(tileColumn) >= Math.ceil(GRID.width / GRID.tileSize)) {
     return new Response('Invalid tile coordinates', { status: 400 });
@@ -169,7 +215,10 @@ export default {
     if (request.method === 'GET' && url.pathname === '/api/circle') {
       const parameters = circleParameters(url.searchParams);
       if (!parameters) return new Response('Use lat from -90 to 90, long from -180 to 180 and distance_km from 3 to 100.', { status: 400 });
-      return Response.json(await circle(env.TILES, parameters));
+      const [result, place] = await Promise.all([
+        circle(env.TILES, parameters), nearestPlace(env.TILES, parameters.latitude, parameters.longitude),
+      ]);
+      return Response.json({ ...result, place });
     }
     return notFound();
   },
@@ -343,8 +392,39 @@ const page = `<!doctype html>
             margin: 0.35em 1em;
         }
 
+        #resultlabel {
+            text-align: center;
+            color: #444;
+        }
+
+        #copyimage {
+            border: 1px solid #183551;
+            background: #183551;
+            color: white;
+            font: inherit;
+            padding: 0.3em 0.9em;
+            cursor: pointer;
+        }
+
+        #copyimage:disabled {
+            background: #F0F0F0;
+            color: #888;
+            border-color: #ccc;
+            cursor: default;
+        }
+
         #secondarycounter, #stopcounter, #billionairecounter {
             text-align: center;
+        }
+
+        .share-image {
+            margin: 0.5em 1em;
+            text-align: center;
+        }
+
+        #copyimage {
+            padding: 0.35em 0.7em;
+            font: inherit;
         }
 
         .methodology-note {
@@ -433,6 +513,7 @@ const page = `<!doctype html>
 <p id="stopcounter" hidden></p>
 <p id="secondarycounter"></p>
 <p id="billionairecounter" hidden></p>
+<p class="share-image"><button type="button" id="copyimage" disabled>Copy image</button> <span id="imagestatus" role="status"></span></p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
 <h2>Give me the data!</h2>
 <div id="table"></div>
@@ -448,6 +529,7 @@ const page = `<!doctype html>
 <p>Land and building value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a> and <a href="https://eng.stat.gov.tw/News_Content.aspx?n=2336&amp;s=235628">Taiwan DGBAS national accounts</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
 <p>Billionaire net worths: Forbes real-time profiles, for example <a href="https://www.forbes.com/profile/elon-musk/">Elon Musk</a>, 16 October 2026.</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles from the <a href="https://operations.osmfoundation.org/policies/tiles/">OpenStreetMap Foundation</a>.</p>
+<p>Place names: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Boundaries and statistics notices: &copy; EuroGeographics for the administrative boundaries. Source: Eurostat; moneymap derives regional shares from these figures, and Eurostat is not responsible for the results. Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>. Contains OS data &copy; Crown copyright and database right 2026. Copyright Scottish Government, contains Ordnance Survey data &copy; Crown copyright and database right 2026. Source: NISRA; contains Ordnance Survey of Northern Ireland information licensed under the Open Government Licence v3.0. Full citations are in <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
@@ -522,6 +604,20 @@ function inBillionaires(value) {
 function perHead(value) {
   return value === null ? '' : '$' + numberFormat.format(value);
 }
+// Where the circle is, from the nearest named place the API returns.
+function whereText() {
+  if (!lastResult) return 'within the circle';
+  var radius = 'within ' + lastResult.distance_km + ' km of ';
+  var place = lastResult.place;
+  if (!place) return radius + Math.abs(lastResult.lat).toFixed(2) + '°' + (lastResult.lat >= 0 ? 'N' : 'S') + ' ' + Math.abs(lastResult.long).toFixed(2) + '°' + (lastResult.long >= 0 ? 'E' : 'W');
+  var name = place.name + ', ' + place.country.replace(/^The /, 'the ');
+  return place.distance_km <= 10 ? radius + name : radius + 'a point ' + Math.round(place.distance_km) + ' km from ' + name;
+}
+function resultLabel() {
+  if (mode === 'property') return 'Land and buildings ' + whereText() + ' (2024, US dollars):';
+  if (mode === 'gdp') return 'GDP ' + whereText() + ' in 2024 (PPP, international dollars):';
+  return 'People living ' + whereText() + ' in 2025:';
+}
 function renderResult() {
   var isGDP = mode === 'gdp';
   var isProperty = mode === 'property';
@@ -531,7 +627,7 @@ function renderResult() {
   document.getElementById('populationmode').setAttribute('aria-pressed', String(mode === 'population'));
   document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
   document.getElementById('propertymode').setAttribute('aria-pressed', String(isProperty));
-  document.getElementById('resultlabel').textContent = isProperty ? 'Value of land and buildings within circle (2024, US dollars):' : isGDP ? 'GDP within circle in 2024 (PPP, international dollars):' : 'Population within circle in 2025:';
+  document.getElementById('resultlabel').textContent = resultLabel();
   document.getElementById('maincounter').textContent = lastResult ? (isProperty ? money(lastResult.land_value + lastResult.building_value) : isGDP ? money(lastResult.gdp) : numberFormat.format(lastResult.population)) : '--';
   var secondary = '';
   if (lastResult) {
@@ -544,7 +640,143 @@ function renderResult() {
   document.getElementById('billionairecounter').textContent = scale ? scale.text : '';
   document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
   document.getElementById('stopcounter').textContent = lastResult ? 'The circle also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
+  document.getElementById('copyimage').disabled = !lastResult;
+  document.getElementById('imagestatus').textContent = '';
   renderTable();
+}
+function drawShareCard() {
+  var width = 1200, height = 675, headerHeight = 64, mapSide = height - headerHeight;
+  var panelLeft = mapSide + 36, panelWidth = width - panelLeft - 36;
+  var canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  var context = canvas.getContext('2d');
+  context.textBaseline = 'top';
+  context.fillStyle = 'white';
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = '#183551';
+  context.fillRect(0, 0, width, headerHeight);
+  context.fillStyle = 'white';
+  context.textAlign = 'center';
+  context.font = 'bold 34px sans-serif';
+  context.fillText(document.getElementById('heading').textContent.toUpperCase(), width / 2, 15);
+
+  // A square of the map around the circle, scaled to fill the left of the card.
+  var mapElement = map.getContainer();
+  var mapBounds = mapElement.getBoundingClientRect();
+  var mapSize = map.getSize();
+  var side = Math.min(mapSize.x, mapSize.y);
+  var centre = selectedPoint ? map.latLngToContainerPoint(selectedPoint) : L.point(mapSize.x / 2, mapSize.y / 2);
+  var cropLeft = Math.min(Math.max(centre.x - side / 2, 0), mapSize.x - side);
+  var cropTop = Math.min(Math.max(centre.y - side / 2, 0), mapSize.y - side);
+  var scale = mapSide / side;
+  context.save();
+  context.beginPath();
+  context.rect(0, headerHeight, mapSide, mapSide);
+  context.clip();
+  context.translate(0, headerHeight);
+  context.scale(scale, scale);
+  context.translate(-cropLeft, -cropTop);
+  context.fillStyle = '#ddd';
+  context.fillRect(0, 0, mapSize.x, mapSize.y);
+  mapElement.querySelectorAll('.leaflet-tile-loaded').forEach(function (tile) {
+    var bounds = tile.getBoundingClientRect();
+    if (tile.naturalWidth && bounds.width && bounds.height) {
+      context.globalAlpha = Number(getComputedStyle(tile).opacity);
+      context.drawImage(tile, bounds.left - mapBounds.left - mapElement.clientLeft,
+        bounds.top - mapBounds.top - mapElement.clientTop, bounds.width, bounds.height);
+    }
+  });
+  context.globalAlpha = 1;
+  CirclesLayer.eachLayer(function (circle) {
+    var bounds = circle.getBounds();
+    var northWest = map.latLngToContainerPoint(bounds.getNorthWest());
+    var southEast = map.latLngToContainerPoint(bounds.getSouthEast());
+    context.beginPath();
+    context.ellipse((northWest.x + southEast.x) / 2, (northWest.y + southEast.y) / 2,
+      (southEast.x - northWest.x) / 2, (southEast.y - northWest.y) / 2, 0, 0, 2 * Math.PI);
+    context.fillStyle = circle.options.fillColor || circle.options.color;
+    context.globalAlpha = circle.options.fillOpacity;
+    context.fill();
+    context.strokeStyle = circle.options.color;
+    context.lineWidth = 3 / scale;
+    context.globalAlpha = circle.options.opacity;
+    context.stroke();
+  });
+  context.restore();
+  context.textAlign = 'right';
+  context.font = '13px sans-serif';
+  var credit = '© OpenStreetMap contributors';
+  var creditWidth = context.measureText(credit).width + 12;
+  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  context.fillRect(mapSide - creditWidth, height - 20, creditWidth, 20);
+  context.fillStyle = '#183551';
+  context.fillText(credit, mapSide - 6, height - 17);
+
+  // The figures, left-aligned in the right-hand panel.
+  context.textAlign = 'left';
+  function drawWrapped(text, y, font, colour, lineHeight) {
+    context.font = font;
+    context.fillStyle = colour;
+    var line = '';
+    text.split(' ').forEach(function (word) {
+      var next = line ? line + ' ' + word : word;
+      if (line && context.measureText(next).width > panelWidth) {
+        context.fillText(line, panelLeft, y);
+        y += lineHeight;
+        line = word;
+      } else line = next;
+    });
+    context.fillText(line, panelLeft, y);
+    return y + lineHeight;
+  }
+  var where = whereText();
+  var y = drawWrapped(where.charAt(0).toUpperCase() + where.slice(1), headerHeight + 34, 'bold 30px sans-serif', '#183551', 38);
+  var unit = mode === 'property' ? 'Land and buildings, 2024, US dollars' : mode === 'gdp' ? 'GDP in 2024, PPP international dollars' : 'People living there in 2025';
+  y = drawWrapped(unit, y + 18, '20px sans-serif', '#555', 26);
+  y = drawWrapped(document.getElementById('maincounter').textContent, y + 4, 'bold 64px sans-serif', 'black', 72);
+  y = drawWrapped(document.getElementById('secondarycounter').textContent, y + 4, '22px sans-serif', 'black', 30);
+  var detail = document.getElementById(mode === 'property' ? 'billionairecounter' : 'stopcounter');
+  if (!detail.hidden) drawWrapped(detail.textContent, y + 10, '20px sans-serif', 'black', 27);
+  drawWrapped('moneymap.jjpcodes.com', height - 92, 'bold 34px sans-serif', '#183551', 40);
+  drawWrapped('Read the methodology before posting a screenshot on Twitter pwning me', height - 44, '15px sans-serif', '#183551', 20);
+  return new Promise(function (resolve, reject) {
+    canvas.toBlob(function (blob) {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not create the PNG'));
+    }, 'image/png');
+  });
+}
+async function copyImage() {
+  var button = document.getElementById('copyimage');
+  var status = document.getElementById('imagestatus');
+  button.disabled = true;
+  status.textContent = '';
+  var blobPromise = Promise.resolve().then(drawShareCard);
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);
+        status.textContent = 'Image copied. Paste it into your post.';
+        return;
+      } catch (error) {
+        // The same PNG is still available when clipboard permission is denied.
+      }
+    }
+    var url = URL.createObjectURL(await blobPromise);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'moneymap.png';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    status.textContent = 'Image downloaded.';
+  } catch (error) {
+    status.textContent = 'Could not create the image. Please try again.';
+  } finally {
+    button.disabled = !lastResult;
+  }
 }
 function renderTable() {
   if (!lastResult) {
@@ -570,8 +802,10 @@ function changeMode(nextMode) {
 document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
 document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
 document.getElementById('propertymode').addEventListener('click', function () { changeMode('property'); });
+document.getElementById('copyimage').addEventListener('click', copyImage);
 renderResult();
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  crossOrigin: 'anonymous',
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
 var reloadControl = L.Control.extend({
