@@ -17,6 +17,7 @@ import fiona
 from openpyxl import load_workbook
 from rasterio.warp import transform_geom
 import shapely
+import unicodedata
 from shapely.geometry import shape
 
 from layers.grid import ROOT
@@ -48,6 +49,53 @@ class Boundary:
     parent_ids: list = field(default_factory=list)
     details: dict = field(default_factory=dict)
 
+
+
+# Eurostat publishes municipality names only in their own script. Greek names follow
+# ELOT 743 and Cyrillic names Bulgaria's official system (with Macedonian letters), so
+# Περιβόλια reads Perivolia and Велико Търново reads Veliko Tarnovo.
+GREEK_COMMUNITY_PREFIXES = ('Δημοτική Κοινότητα ', 'Ψευδοδημοτική Κοινότητα ')
+GREEK_PAIRS = {'ου': 'ou', 'αυ': 'av', 'ευ': 'ev', 'ηυ': 'iv', 'γγ': 'ng', 'γκ': 'gk', 'γξ': 'nx', 'γχ': 'nch'}
+# αυ, ευ and ηυ become af, ef and if before a voiceless consonant or at the end of a word.
+GREEK_VOICELESS = set('θκξπστφχψ')
+GREEK_PAIRS_AT_WORD_START = {'μπ': 'b', 'ντ': 'd'}
+GREEK_LETTERS = dict(zip('αβγδεζηθικλμνξοπρσςτυφχψω',
+    ['a', 'v', 'g', 'd', 'e', 'z', 'i', 'th', 'i', 'k', 'l', 'm', 'n', 'x', 'o', 'p', 'r', 's', 's', 't', 'y', 'f', 'ch', 'ps', 'o']))
+CYRILLIC_LETTERS = dict(zip('абвгдежзийклмнопрстуфхцчшщъьюяѓќјљњѕџ',
+    ['a', 'b', 'v', 'g', 'd', 'e', 'zh', 'z', 'i', 'y', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 't', 'u', 'f', 'h', 'ts', 'ch',
+     'sh', 'sht', 'a', 'y', 'yu', 'ya', 'gj', 'kj', 'j', 'lj', 'nj', 'dz', 'dzh']))
+
+
+def latin_place_name(name):
+    for prefix in GREEK_COMMUNITY_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    # Drop Greek accents only: Cyrillic й, ѓ and ќ are letters of their own.
+    kept, base = [], ''
+    for character in unicodedata.normalize('NFD', name):
+        if not unicodedata.combining(character):
+            base = character
+        if not (unicodedata.combining(character) and '\u0370' <= base <= '\u03ff'):
+            kept.append(character)
+    plain = unicodedata.normalize('NFC', ''.join(kept))
+    if all(character.isascii() or unicodedata.name(character, '').startswith('LATIN') for character in plain):
+        return name
+    latin, index = [], 0
+    while index < len(plain):
+        pair, character = plain[index:index + 2].lower(), plain[index]
+        at_word_start = index == 0 or not plain[index - 1].isalpha()
+        if pair in GREEK_PAIRS_AT_WORD_START and at_word_start:
+            letters, used = GREEK_PAIRS_AT_WORD_START[pair], 2
+        elif pair in GREEK_PAIRS:
+            letters, used = GREEK_PAIRS[pair], 2
+            following = plain[index + 2:index + 3].lower()
+            if pair[1] == 'υ' and pair[0] != 'ο' and (not following.isalpha() or following in GREEK_VOICELESS):
+                letters = letters[0] + 'f'
+        else:
+            letters, used = GREEK_LETTERS.get(character.lower()) or CYRILLIC_LETTERS.get(character.lower()) or character, 1
+        latin.append(letters.capitalize() if character.isupper() else letters)
+        index += used
+    return ''.join(latin)
 
 def validate(path):
     suffix = path.with_suffix('').suffix if path.suffix == '.download' else path.suffix
@@ -174,7 +222,7 @@ def load(countries=None):
         metadata[country] = dict(name=properties.get('NAME_ENGL') or country, iso3=iso3, source_iso3=source_iso3,
                                  grid_owners=list(GRID_OWNERS.get(country, (iso3,))))
         boundaries[identifier] = Boundary(identifier, code,
-            properties.get('NAME_ENGL') if level == 0 else properties['NUTS_NAME'],
+            properties.get('NAME_ENGL') if level == 0 else properties.get('NAME_LATN') or properties['NUTS_NAME'],
             'country' if level == 0 else f'nuts{level}', country, 'gisco', geometry,
             ['nuts-' + code[:length] for length in range(len(code)-1, 1, -1)])
     for country, record in metadata.items():
@@ -218,7 +266,7 @@ def load(countries=None):
             diagnostics['lau_parent_methods']['spatial_containment'] += 1
         if not parents:
             parents = ['nuts-' + country]
-        boundaries[identifier] = Boundary(identifier, code, properties['LAU_NAME'], 'lau', country,
+        boundaries[identifier] = Boundary(identifier, code, latin_place_name(properties['LAU_NAME']), 'lau', country,
                                            'gisco', geometry, parents)
     if not selected or 'US' in selected:
         metadata['US'] = dict(name='United States', iso3='USA', grid_owners=['USA'])

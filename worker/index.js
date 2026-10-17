@@ -737,6 +737,7 @@ var areaFilesBase = '/areas/';
 var areaFileCache = new Map();
 var areaFileCacheBytes = 0;
 var areaTrail = [];
+var linkedAreaZoom = null;
 var areaClick = null;
 var areaBoundaryCredit = '';
 var selectedAreaLevel = null;
@@ -1018,7 +1019,27 @@ function drawShareCard() {
   y = drawWrapped(document.getElementById('maincounter').textContent, y + 4, 'bold 64px sans-serif', 'black', 72);
   y = drawWrapped(document.getElementById('secondarycounter').textContent, y + 4, '22px sans-serif', 'black', 30);
   var detail = document.getElementById(mode === 'property' ? 'billionairecounter' : 'stopcounter');
-  if (!detail.hidden) drawWrapped(detail.textContent, y + 10, '20px sans-serif', 'black', 27);
+  if (!detail.hidden) y = drawWrapped(detail.textContent, y + 10, '20px sans-serif', 'black', 27);
+  // For a named area, every area containing it, smallest to largest, with its value.
+  var trail = selectedArea ? areaTrail.filter(function (reference) { return areaTrailTotals[reference.id]; }) : [];
+  if (trail.length > 1) {
+    var rowHeight = Math.min(26, Math.floor((height - 112 - y) / trail.length));
+    trail.forEach(function (reference, index) {
+      var rowTop = y + 12 + index * rowHeight;
+      var isSelected = reference.id === selectedArea.id;
+      context.font = (isSelected ? 'bold ' : '') + Math.min(19, rowHeight - 4) + 'px sans-serif';
+      context.fillStyle = isSelected ? '#183551' : '#333';
+      var value = areaValueText(areaTrailTotals[reference.id]);
+      var valueWidth = context.measureText(value).width;
+      var name = areaDisplayName(reference) + (areaLevelName(reference) ? ' (' + areaLevelName(reference) + ')' : '');
+      while (name.length > 4 && context.measureText(name).width > panelWidth - valueWidth - 16) name = name.slice(0, -2) + '…';
+      context.textAlign = 'left';
+      context.fillText(name, panelLeft, rowTop);
+      context.textAlign = 'right';
+      context.fillText(value, panelLeft + panelWidth, rowTop);
+    });
+    context.textAlign = 'left';
+  }
   drawWrapped('moneymap.jjpcodes.com', height - 92, 'bold 34px sans-serif', '#183551', 40);
   drawWrapped('Plz read the methodology b4 posting a screenshot on Twitter pwning me', height - 44, '15px sans-serif', '#183551', 20);
   return new Promise(function (resolve, reject) {
@@ -1028,12 +1049,23 @@ function drawShareCard() {
     }, 'image/png');
   });
 }
+var areaTrailTotals = {};
+async function loadAreaTrailTotals() {
+  if (!selectedArea) return;
+  await Promise.all(areaTrail.map(async function (reference) {
+    if (!areaTrailTotals[reference.id]) areaTrailTotals[reference.id] = (await loadNamedArea(reference)).totals;
+  }));
+}
+function areaValueText(totals) {
+  if (mode === 'population') return numberFormat.format(Math.round(totals.population)) + ' people';
+  return money(mode === 'gdp' ? totals.gdp : totals.land_value + totals.building_value).replace(' trillion', 'tn').replace(' billion', 'bn').replace(' million', 'm');
+}
 async function copyImage() {
   var button = document.getElementById('copyimage');
   var status = document.getElementById('imagestatus');
   button.disabled = true;
   status.textContent = '';
-  var blobPromise = Promise.resolve().then(drawShareCard);
+  var blobPromise = Promise.resolve().then(loadAreaTrailTotals).then(drawShareCard);
   try {
     if (navigator.clipboard && window.ClipboardItem) {
       try {
@@ -1238,6 +1270,11 @@ var NEW_YORK_BOROUGHS = { 'us-county-36061': 'Manhattan', 'us-county-36047': 'Br
 function areaDisplayName(area) {
   return NEW_YORK_BOROUGHS[area.id] ? NEW_YORK_BOROUGHS[area.id] + ' (' + area.name + ')' : area.name;
 }
+// The level shown after a name, or nothing when the name already says it ("Cook County").
+function areaLevelName(reference) {
+  if (reference.level === 'county' && / County$/.test(reference.name)) return '';
+  return { lau: 'municipality', place: 'city', county: 'county', state: 'state', nuts3: 'NUTS 3', nuts2: 'NUTS 2', nuts1: 'NUTS 1' }[reference.level] || '';
+}
 function areaLevelRank(level) {
   return { lau: 0, place: 0, nuts3: 1, county: 1, nuts2: 2, state: 2, nuts1: 3, country: 4 }[level];
 }
@@ -1412,8 +1449,8 @@ function renderAreaLinks() {
       selectNamedArea(reference);
     });
     navigation.appendChild(link);
-    var levelName = { lau: 'municipality', place: 'city', county: 'county', state: 'state', nuts3: 'NUTS 3', nuts2: 'NUTS 2', nuts1: 'NUTS 1' }[reference.level];
-    if (levelName && !(reference.level === 'county' && / County$/.test(reference.name))) {
+    var levelName = areaLevelName(reference);
+    if (levelName) {
       var label = document.createElement('small');
       label.textContent = ' ' + levelName;
       navigation.appendChild(label);
@@ -1441,8 +1478,12 @@ async function selectNamedArea(reference, controller) {
     var mainBounds = mainAreaBounds(area.geometry);
     var bounds = L.latLngBounds([mainBounds[1], mainBounds[0]], [mainBounds[3], mainBounds[2]]);
     var size = map.getSize(), side = Math.min(size.x, size.y);
-    var padding = L.point((size.x - side) / 2 + 24, (size.y - side) / 2 + 24);
-    map.fitBounds(bounds, { padding: padding });
+    if (linkedAreaZoom !== null) {
+      map.setView(bounds.getCenter(), linkedAreaZoom);
+      linkedAreaZoom = null;
+    } else {
+      map.fitBounds(bounds, { padding: L.point((size.x - side) / 2 + 24, (size.y - side) / 2 + 24) });
+    }
     var centre = bounds.getCenter();
     selectedPoint = [centre.lat, centre.lng];
     lastResult = Object.assign({}, area.totals, {
@@ -1451,6 +1492,7 @@ async function selectNamedArea(reference, controller) {
     });
     history.replaceState({}, '', areaLink(area.id));
     renderAreaLinks();
+    loadAreaTrailTotals().catch(function (error) { console.warn('Totals for the larger areas could not load', error); });
     renderResult();
     document.getElementById('status').textContent = '';
     scheduleAreaOutlines();
@@ -1603,6 +1645,7 @@ function useMyLocation() {
 }
 document.querySelectorAll('.use-location').forEach(function (button) { button.addEventListener('click', useMyLocation); });
 if (params.has('area') && params.has('areaLat') && params.has('areaLong')) {
+  if (params.has('zoom') && Number.isFinite(Number(params.get('zoom')))) linkedAreaZoom = Number(params.get('zoom'));
   var areaLatitude = Number(params.get('areaLat')), areaLongitude = Number(params.get('areaLong'));
   if (Number.isFinite(areaLatitude) && Math.abs(areaLatitude) <= 90 && Number.isFinite(areaLongitude) && Math.abs(areaLongitude) <= 180) {
     showAreaControls();
