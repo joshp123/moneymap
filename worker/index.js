@@ -377,6 +377,9 @@ const page = `<!doctype html>
 <title>moneymap: population around a point</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="">
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin=""></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js" integrity="sha384-tXYNKOHx4T02jMP7YYCtBxPIv1B5gaA5mcVPBzqMp6d7VzWzxJgI2aWF/nJLrQdS" crossorigin=""></script>
     <style>
         input[type="range"] {
             width: 220px;
@@ -713,7 +716,7 @@ const page = `<!doctype html>
 <p>Transit stops: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, via <a href="https://overturemaps.org/">Overture Maps Foundation</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>).</p>
 <p>Land and building value, 2024: <a href="https://data-explorer.oecd.org/vis?df[ag]=OECD.SDD.NAD&amp;df[id]=DSD_NASEC10@DF_TABLE9B">OECD Table 9B</a> and <a href="https://eng.stat.gov.tw/cl.aspx?n=2411">Taiwan DGBAS national wealth statistics</a>. <a href="https://data.worldbank.org/indicator/NY.GDP.MKTP.CD">GDP</a> and <a href="https://data.worldbank.org/indicator/EN.URB.MCTY.TL.ZS">population in large cities</a>: World Bank (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). Additional GDP: <a href="https://unstats.un.org/unsd/snaama/">UN Statistics Division</a> and <a href="https://eng.stat.gov.tw/News_Content.aspx?n=2336&amp;s=235628">Taiwan DGBAS national accounts</a>. Taiwan exchange rate: <a href="https://www.cbc.gov.tw/en/">Taiwan Central Bank</a>.</p>
 <p>Billionaire net worths: Forbes real-time profiles, for example <a href="https://www.forbes.com/profile/elon-musk/">Elon Musk</a>, 16 October 2026.</p>
-<p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles from the <a href="https://operations.osmfoundation.org/policies/tiles/">OpenStreetMap Foundation</a>.</p>
+<p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, map tiles from <a href="https://openfreemap.org">OpenFreeMap</a> using <a href="https://www.openmaptiles.org/">OpenMapTiles</a> (<a href="https://github.com/openmaptiles/openmaptiles/blob/master/LICENSE.md">CC BY 4.0</a>) and drawn with <a href="https://maplibre.org/">MapLibre</a>.</p>
 <p>Place names: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
 <p>Boundaries and statistics notices: <a href="https://ec.europa.eu/eurostat/web/gisco/geodata/administrative-units">Eurostat GISCO</a>, &copy; EuroGeographics for the administrative boundaries. Source: Eurostat; moneymap derives regional shares from these figures, and Eurostat is not responsible for the results. <a href="https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html">US Census Bureau cartographic boundaries</a> are public domain. Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>. Contains OS data &copy; Crown copyright and database right 2026. Copyright Scottish Government, contains Ordnance Survey data &copy; Crown copyright and database right 2026. Source: NISRA; contains Ordnance Survey of Northern Ireland information licensed under the Open Government Licence v3.0. Full citations are in <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
@@ -929,14 +932,9 @@ function drawShareCard() {
   context.translate(-cropLeft, -cropTop);
   context.fillStyle = '#ddd';
   context.fillRect(0, 0, mapSize.x, mapSize.y);
-  mapElement.querySelectorAll('.leaflet-tile-loaded').forEach(function (tile) {
-    var bounds = tile.getBoundingClientRect();
-    if (tile.naturalWidth && bounds.width && bounds.height) {
-      context.globalAlpha = Number(getComputedStyle(tile).opacity);
-      context.drawImage(tile, bounds.left - mapBounds.left - mapElement.clientLeft,
-        bounds.top - mapBounds.top - mapElement.clientTop, bounds.width, bounds.height);
-    }
-  });
+  var baseCanvas = baseMap.getCanvas(), baseBounds = baseCanvas.getBoundingClientRect();
+  context.drawImage(baseCanvas, baseBounds.left - mapBounds.left - mapElement.clientLeft,
+    baseBounds.top - mapBounds.top - mapElement.clientTop, baseBounds.width, baseBounds.height);
   context.globalAlpha = 1;
   if (selectedArea && lastResult && lastResult.area_name) {
     var polygons = selectedArea.geometry.type === 'Polygon' ? [selectedArea.geometry.coordinates] : selectedArea.geometry.coordinates;
@@ -984,7 +982,7 @@ function drawShareCard() {
   context.restore();
   context.textAlign = 'right';
   context.font = '13px sans-serif';
-  var credits = ['© OpenStreetMap contributors'];
+  var credits = ['© OpenStreetMap contributors · OpenFreeMap'];
   if (selectedArea && selectedArea.source === 'gisco') credits.unshift('© EuroGeographics for the administrative boundaries. Source: Eurostat');
   credits.forEach(function (credit, index) {
     var creditWidth = context.measureText(credit).width + 12;
@@ -1118,10 +1116,22 @@ document.getElementById('gdpmode').addEventListener('click', function () { chang
 document.getElementById('propertymode').addEventListener('click', function () { changeMode('property'); });
 document.getElementById('copyimage').addEventListener('click', copyImage);
 renderResult();
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  crossOrigin: 'anonymous',
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+// OpenFreeMap's vector map, labelled in English, or in Latin script where a place has no English name.
+// Labels that exist only in another script (some small suburbs) are left off.
+var baseMap = L.maplibreGL({
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  canvasContextAttributes: { preserveDrawingBuffer: true },
+  attribution: '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
+baseMap.getMaplibreMap().on('style.load', function () {
+  var englishName = ['case', ['has', 'name:en'], ['get', 'name:en'], ['has', 'name:latin'], ['get', 'name:latin'],
+    ['has', 'name:nonlatin'], '', ['get', 'name']];
+  var maplibreMap = baseMap.getMaplibreMap();
+  maplibreMap.getStyle().layers.forEach(function (layer) {
+    var label = layer.layout && layer.layout['text-field'];
+    if (label && JSON.stringify(label).indexOf('name') !== -1) maplibreMap.setLayoutProperty(layer.id, 'text-field', englishName);
+  });
+});
 var reloadControl = L.Control.extend({
   options: { position: 'topright' },
   onAdd: function () {
