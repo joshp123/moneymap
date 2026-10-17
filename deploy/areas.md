@@ -1,4 +1,4 @@
-Written by AI on 2026.10.17 by model gpt-6.
+Written by AI on 2026.10.17 by model gpt-6.1-sol; release steps by model claude opus 5.5.
 
 # Publish named areas
 
@@ -19,17 +19,16 @@ Both commands read the upload credentials from hidden stdin. The default sync,
 with no dataset names, now includes areas alongside layers and place names.
 Deploy the updated Worker before the first area sync.
 
-For an open, downloadable copy, attach an archive to the corresponding existing
-GitHub release. Set `release_tag` to that release's tag and run these commands
-from the checkout. This is separate from serving the page; it does not replace
-the R2 sync.
+For an open, downloadable copy, publish each data build as a GitHub release
+named after its build date. This is separate from serving the page; it does not
+replace the R2 sync.
 
 ```sh
-release_tag='YOUR_EXISTING_RELEASE_TAG'
+release_tag="areas-$(date +%Y-%m-%d)"
 mkdir -p data/build/areas-release
 tar -czf data/build/areas-release/moneymap-areas.tar.gz -C data areas
-gh release upload "$release_tag" data/build/areas-release/moneymap-areas.tar.gz --repo joshp123/moneymap
+gh release create "$release_tag" data/build/areas-release/moneymap-areas.tar.gz --repo joshp123/moneymap \
+  --target main --title "Named areas, $(date +%-d\ %B\ %Y)" --notes "Outlines and totals for the pick-an-area mode."
 ```
 
-The archive includes the source and licence notices. Keep the check reports in
-the repository alongside the version of the builder used for the release.
+The archive includes the source and licence notices.
