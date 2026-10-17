@@ -41,6 +41,7 @@ layers/                   Builds each layer's tiles into data/layers/
     allocation.py         Equal shares of weighted residents and GDP
     build.py              Country targets, allocation, tiles and conservation checks
 sources/                  External data, extracted to the grid
+  named_areas.py          Downloads and parses GISCO 2024 and Census 2025 boundaries
   regional_gdp.py         Kummu admin-1 and official BEA, ONS, CBS and Eurostat GDP
   overture_places.sql     Workplace places per cell
   overture_stops.sql      Transit stops per cell
@@ -57,14 +58,20 @@ checks/                   Evidence that the numbers are right
   land_value.py           Checks land against official held-out valuations
   building_value.py       Checks buildings and property against official valuations
   property_split.py       Shared valuation sampling, scores and land-share checks
+  named_areas.py          Checks named-area conservation and official regional GDP controls
+  named_areas_http.mjs    Runs the served page's area selection and outline checks over HTTP
+  named_areas_hosting.mjs Checks Worker area-file serving and sync discovery without uploading
+named_areas/              Builds area totals and small static outline files from existing tiles
 deploy/
   build.sh                Builds the Sites artifact in dist/ and stamps the deployed commit
   validate-artifact.mjs   Checks the artifact is an ES module exporting default.fetch
   preview.mjs             Runs the real Worker locally, with data/ as the R2 bucket
-  sync-tiles.mjs          Syncs data/layers/ and places/cities.json
+  sync-tiles.mjs          Syncs data/layers/, data/areas/ and places/cities.json
+  areas.md               Area hosting, sync and optional GitHub release download steps
 research/                 Experiments and frozen test inputs; not allocation code used by the build
 docs/                     Method and research notes
 data/                     Inputs and outputs; local only, not in git
+  areas/                  Named-area records, click lookup and viewport outlines
 ```
 
 ## Build and check locally
@@ -102,6 +109,49 @@ devenv shell -- python -m checks.circles
 Builders write `data/layers/<layer>/<tile row>/<tile column>.bin` and reports in `data/build/`; checks write `data/checks/`. A builder will not overwrite an existing layer: move it aside first. The preview runs the real Worker at http://127.0.0.1:8787 with `data/` standing in for the R2 bucket. Deployment is in [AGENTS.md](AGENTS.md).
 
 The land and building builds each write a `country_totals.csv` and `conservation.json` under `data/build/<layer>/`, with every country's target, source, data year and any GDP conversion reference. The building report also records the national model's leave-one-out scores.
+
+## Build named areas
+
+Named areas add municipalities and NUTS regions from Eurostat GISCO (2024),
+and places, counties and states from the US Census Bureau (2025). Their totals
+come from the existing seven tile layers; this build does not change the grids.
+Each cell belongs wholly to the area containing its centre. At levels that
+tile a country, valued cells outside every polygon go to the nearest area of
+the same level and country, using the grid builder's ownership code. US places
+leave countryside unassigned; clicking there selects the county. Areas with
+no grid cell centre are omitted. Countries use the existing grid ownership.
+France includes its separately owned overseas regions; Norway includes
+Svalbard and Jan Mayen, and Cyprus includes northern Cyprus.
+
+```sh
+devenv shell -- python -m sources.named_areas
+devenv shell -- python -m named_areas.build
+devenv shell -- python -m checks.named_areas --built data/areas --report data/build/named-areas/checks.json
+PORT=8788 devenv shell -- node deploy/preview.mjs
+# In another shell, while the preview runs:
+devenv shell -- node checks/named_areas_http.mjs http://127.0.0.1:8788
+devenv shell -- node checks/named_areas_hosting.mjs
+```
+
+Downloads are cached in `data/sources/named-areas/`. The builder writes static
+files into `data/areas/`, including the source URLs and licence notices.
+Records, click lookup and viewport outlines use gzip encoding (`.json.gz`);
+the browser decompresses them as it loads them. The viewport index gives
+per-level shard counts, so dense views can be skipped before fetching outlines.
+Outline linework follows the source polygon boundaries, without shard-edge strokes.
+Build diagnostics and check reports stay in `data/build/named-areas/`. The preview and live page load `/areas/...` from their
+own origin. See [area hosting and release downloads](deploy/areas.md).
+The European boundary data retains Eurostat's non-commercial terms and
+EuroGeographics notice, separately from the code's MIT licence.
+
+GDP comparisons use the official regional controls scaled to the grid's
+country totals: Eurostat euros and BEA US dollars cannot be compared directly
+with the grid's PPP international dollars. The checks report both values.
+US places do not cover the countryside. Each level in the picker is found
+independently at the clicked point, including the county beneath a city that
+spans several counties. The build report records coverage gaps and
+municipality-to-region boundary mismatches, nearest assignments and omitted
+areas at each level.
 
 `sources.geonames` downloads `cities15000.zip` and `countryInfo.txt` from the [GeoNames dump](https://download.geonames.org/export/dump/) into `data/raw/geonames/` if missing. It writes compact `[name, country, latitude, longitude, population]` rows to `data/places/cities.json`. The default tile sync includes this file; selecting `places` syncs it alone, with the same MD5 comparison and hidden-stdin credentials. Deploy the updated Worker before its first upload. Until the file is present, `place` is `null`; the numeric results are unaffected.
 

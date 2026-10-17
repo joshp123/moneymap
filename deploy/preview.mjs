@@ -14,7 +14,8 @@ const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const bucketDirectory = resolve(process.argv[2] || resolve(projectDirectory, 'data'));
 const port = Number(process.env.PORT || 8787);
 function objectPath(key) {
-  if (key !== 'places/cities.json' && !/^layers\/[a-z_]+\/(\d+\/(\d+\.bin)?)?$/.test(key)) throw new Error(`Invalid key: ${key}`);
+  const isAreaKey = /^areas\/(?:[A-Za-z0-9_-]+\/)*(?:[A-Za-z0-9_-]+\.(?:json(?:\.gz)?|md|csv))?$/.test(key);
+  if (key !== 'places/cities.json' && !isAreaKey && !/^layers\/[a-z_]+\/(\d+\/(\d+\.bin)?)?$/.test(key)) throw new Error(`Invalid key: ${key}`);
   return resolve(bucketDirectory, key);
 }
 async function filesUnder(directory) {
@@ -46,7 +47,8 @@ const env = {
     async get(key) {
       try {
         const bytes = await readFile(objectPath(key));
-        return { arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+        return { etag: createHash('md5').update(bytes).digest('hex'),
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
       } catch (error) {
         if (error.code === 'ENOENT') return null;
         throw error;

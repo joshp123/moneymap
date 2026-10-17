@@ -1,4 +1,4 @@
-// Written by AI on 2026.10.16 by model gpt-6.1-sol.
+// Written by AI on 2026.10.16 by model gpt-6.1-sol; named areas added on 2026.10.17 by model gpt-6.1-sol.
 const GRID = {
   width: 43202, height: 21384,
   west: -180.00791593130032, north: 89.0995831776456,
@@ -246,7 +246,24 @@ async function shape(bucket, points) {
 // GET /__upload/layers/<layer>/ returns {key: etag}; R2's etag is the MD5 of the tile.
 // PUT and DELETE /__upload/layers/<layer>/<tileRow>/<tileColumn>.bin write or remove one tile.
 const TILE_SYNC_PATH = new RegExp(`^/__upload/(layers/(?:${LAYERS.join('|')})/)(?:(\\d+)/(\\d+)\\.bin)?$`);
+const AREA_OBJECT_KEY = /^areas\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:json(?:\.gz)?|md|csv)$/;
 const notFound = () => new Response('Not found', { status: 404 });
+
+async function serveAreaFile(request, bucket, key) {
+  if (!AREA_OBJECT_KEY.test(key)) return notFound();
+  const object = await bucket.get(key);
+  if (!object) return notFound();
+  const headers = {
+    'content-type': key.endsWith('.gz') ? 'application/gzip' : key.endsWith('.json') ? 'application/json; charset=utf-8'
+      : key.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8',
+    'cache-control': 'public, max-age=0, must-revalidate',
+  };
+  if (object.etag) {
+    headers.etag = `"${object.etag}"`;
+    if (request.headers.get('If-None-Match') === headers.etag) return new Response(null, { status: 304, headers });
+  }
+  return new Response(request.method === 'HEAD' ? null : object.body || await object.arrayBuffer(), { headers });
+}
 
 async function objectEtags(bucket, prefix) {
   const etags = {};
@@ -261,6 +278,23 @@ async function objectEtags(bucket, prefix) {
 
 async function handleTileSyncRequest(request, env, pathname) {
   if (!env.UPLOAD_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.UPLOAD_TOKEN}`) return notFound();
+  if (pathname === '/__upload/areas/') {
+    return request.method === 'GET' ? Response.json(await objectEtags(env.TILES, 'areas/')) : notFound();
+  }
+  const areaKey = pathname.slice('/__upload/'.length);
+  if (AREA_OBJECT_KEY.test(areaKey)) {
+    if (request.method === 'PUT') {
+      const bytes = await request.arrayBuffer();
+      if (bytes.byteLength > 20_000_000) return new Response('Area file exceeds 20 MB', { status: 413 });
+      await env.TILES.put(areaKey, bytes);
+      return new Response(null, { status: 201 });
+    }
+    if (request.method === 'DELETE') {
+      await env.TILES.delete(areaKey);
+      return new Response(null, { status: 204 });
+    }
+    return notFound();
+  }
   if (pathname === '/__upload/places/') {
     if (request.method !== 'GET') return notFound();
     const etags = await objectEtags(env.TILES, PLACES_KEY);
@@ -302,6 +336,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/__upload/')) return handleTileSyncRequest(request, env, url.pathname);
+    if (['GET', 'HEAD'].includes(request.method) && url.pathname.startsWith('/areas/')) {
+      return serveAreaFile(request, env.TILES, url.pathname.slice(1));
+    }
     if (request.method === 'GET' && url.pathname === '/') {
       return new Response(page, { headers: { 'content-type': 'text/html; charset=utf-8' } });
     }
@@ -496,6 +533,15 @@ const page = `<!doctype html>
             vertical-align: middle;
         }
 
+        #areaparents small {
+            color: #666;
+        }
+
+        #areaparents a[aria-current] {
+            font-weight: bold;
+            color: #183551;
+        }
+
         .link-button {
             border: none;
             background: none;
@@ -641,8 +687,11 @@ const page = `<!doctype html>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
 <button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button></p>
+<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button> <button type="button" class="link-button" id="pickarea">Or pick an area</button></p>
 <p class="controls" id="shapecontrols" hidden>Click the map to add corners, then <button type="button" id="finishshape" disabled>Finish shape</button> <button type="button" class="link-button" id="backtocircle">Back to circles</button></p>
+<p class="controls" id="areacontrols" hidden>Click the map to pick an area, then step up with the links below. <button type="button" class="link-button" id="areabacktocircle">Back to circles</button></p>
+<nav class="controls" id="areaparents" aria-label="Containing areas" hidden></nav>
+<p class="controls" id="areaoutlinestatus" role="status" hidden></p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
 <p id="resultlabel">Population within circle in 2025:</p>
 <p style="text-align:center" id="maincounter" aria-live="polite">--</p>
@@ -666,14 +715,35 @@ const page = `<!doctype html>
 <p>Billionaire net worths: Forbes real-time profiles, for example <a href="https://www.forbes.com/profile/elon-musk/">Elon Musk</a>, 16 October 2026.</p>
 <p>Map: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, tiles from the <a href="https://operations.osmfoundation.org/policies/tiles/">OpenStreetMap Foundation</a>.</p>
 <p>Place names: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>).</p>
-<p>Boundaries and statistics notices: &copy; EuroGeographics for the administrative boundaries. Source: Eurostat; moneymap derives regional shares from these figures, and Eurostat is not responsible for the results. Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>. Contains OS data &copy; Crown copyright and database right 2026. Copyright Scottish Government, contains Ordnance Survey data &copy; Crown copyright and database right 2026. Source: NISRA; contains Ordnance Survey of Northern Ireland information licensed under the Open Government Licence v3.0. Full citations are in <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a>.</p>
+<p>Boundaries and statistics notices: <a href="https://ec.europa.eu/eurostat/web/gisco/geodata/administrative-units">Eurostat GISCO</a>, &copy; EuroGeographics for the administrative boundaries. Source: Eurostat; moneymap derives regional shares from these figures, and Eurostat is not responsible for the results. <a href="https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html">US Census Bureau cartographic boundaries</a> are public domain. Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/">Open Government Licence v3.0</a>. Contains OS data &copy; Crown copyright and database right 2026. Copyright Scottish Government, contains Ordnance Survey data &copy; Crown copyright and database right 2026. Source: NISRA; contains Ordnance Survey of Northern Ireland information licensed under the Open Government Licence v3.0. Full citations are in <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a>.</p>
 <footer><p>Source code (MIT licence): <a href="${SOURCE_REPOSITORY}">github.com/joshp123/moneymap</a> · <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">How the numbers are calculated</a> · Live version: ${liveVersion}</p></footer>
 <script>
 var map = L.map('map').setView([20, 0], 2);
 var CirclesLayer = L.featureGroup().addTo(map);
+map.createPane('areaOutlines');
+map.getPane('areaOutlines').style.zIndex = 410;
+map.createPane('areaHits');
+map.getPane('areaHits').style.zIndex = 420;
+var areaOutlinesLayer = L.featureGroup().addTo(map);
+var areaHitsLayer = L.featureGroup().addTo(map);
+var areaOutlineRenderer = L.canvas({ pane: 'areaOutlines' });
+var areaHitRenderer = L.canvas({ pane: 'areaHits' });
 var selectedPoint = null;
 var pendingRequest = null;
 var lastResult = null;
+var pickingArea = false;
+var selectedArea = null;
+var areaFilesBase = '/areas/';
+var areaFileCache = new Map();
+var areaFileCacheBytes = 0;
+var areaTrail = [];
+var areaClick = null;
+var areaBoundaryCredit = '';
+var selectedAreaLevel = null;
+var pendingAreaOutlines = null;
+var hoveredAreaId = null;
+var areaOutlineTimer = null;
+var viewportHasGisco = false;
 var params = new URLSearchParams(location.search);
 var mode = params.get('mode') === 'land' ? 'property' : ['gdp', 'property'].includes(params.get('mode')) ? params.get('mode') : 'population';
 if (params.get('mode') === 'land') {
@@ -782,7 +852,8 @@ function perHead(value) {
 }
 // Where the circle is, from the nearest named place the API returns.
 function whereText() {
-  if (!lastResult) return drawingShape ? 'in the shape' : 'within the circle';
+  if (lastResult && lastResult.area_name) return 'in ' + lastResult.area_name;
+  if (!lastResult) return pickingArea ? 'in the selected area' : drawingShape ? 'in the shape' : 'within the circle';
   var isShape = lastResult.points !== undefined;
   var radius = isShape ? 'in a ' + numberFormat.format(Number(lastResult.area_km2.toPrecision(2))) + ' km² shape around ' : 'within ' + lastResult.distance_km + ' km of ';
   var place = lastResult.place;
@@ -799,8 +870,9 @@ function renderResult() {
   var isGDP = mode === 'gdp';
   var isProperty = mode === 'property';
   var heading = isProperty ? 'Property value' : isGDP ? 'GDP' : 'Population';
-  document.getElementById('heading').textContent = heading + ' around a point';
-  document.title = 'moneymap: ' + (isGDP ? 'GDP' : heading.toLowerCase()) + ' around a point';
+  var locationKind = pickingArea ? ' in an area' : ' around a point';
+  document.getElementById('heading').textContent = heading + locationKind;
+  document.title = 'moneymap: ' + (isGDP ? 'GDP' : heading.toLowerCase()) + locationKind;
   document.getElementById('populationmode').setAttribute('aria-pressed', String(mode === 'population'));
   document.getElementById('gdpmode').setAttribute('aria-pressed', String(isGDP));
   document.getElementById('propertymode').setAttribute('aria-pressed', String(isProperty));
@@ -816,7 +888,7 @@ function renderResult() {
   var scale = isProperty && lastResult ? inBillionaires(lastResult.land_value + lastResult.building_value) : null;
   document.getElementById('billionairecounter').textContent = scale ? scale.text : '';
   document.getElementById('stopcounter').hidden = mode !== 'population' || !lastResult;
-  document.getElementById('stopcounter').textContent = lastResult ? (lastResult.points ? 'The shape' : 'The circle') + ' also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
+  document.getElementById('stopcounter').textContent = lastResult ? (lastResult.area_name ? 'The area' : lastResult.points ? 'The shape' : 'The circle') + ' also contains ' + numberFormat.format(lastResult.bus_stops) + ' bus stops, ' + numberFormat.format(lastResult.tram_stops) + ' tram stops, and ' + numberFormat.format(lastResult.rail_stops) + ' metro and train stops.' : '';
   document.getElementById('copyimage').disabled = !lastResult;
   document.getElementById('imagestatus').textContent = '';
   renderTable();
@@ -865,7 +937,27 @@ function drawShareCard() {
     }
   });
   context.globalAlpha = 1;
-  CirclesLayer.eachLayer(function (circle) {
+  if (selectedArea && lastResult && lastResult.area_name) {
+    var polygons = selectedArea.geometry.type === 'Polygon' ? [selectedArea.geometry.coordinates] : selectedArea.geometry.coordinates;
+    context.beginPath();
+    polygons.forEach(function (polygon) {
+      polygon.forEach(function (ring) {
+        ring.forEach(function (coordinate, index) {
+          var point = map.latLngToContainerPoint([coordinate[1], coordinate[0]]);
+          if (index === 0) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
+        });
+        context.closePath();
+      });
+    });
+    context.fillStyle = '#3388ff';
+    context.globalAlpha = 0.2;
+    context.fill('evenodd');
+    context.strokeStyle = '#3388ff';
+    context.lineWidth = 3 / scale;
+    context.globalAlpha = 1;
+    context.stroke();
+  } else CirclesLayer.eachLayer(function (circle) {
     context.beginPath();
     if (circle instanceof L.Polygon) {
       circle.getLatLngs()[0].forEach(function (corner) {
@@ -891,12 +983,16 @@ function drawShareCard() {
   context.restore();
   context.textAlign = 'right';
   context.font = '13px sans-serif';
-  var credit = '© OpenStreetMap contributors';
-  var creditWidth = context.measureText(credit).width + 12;
-  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
-  context.fillRect(mapSide - creditWidth, height - 20, creditWidth, 20);
-  context.fillStyle = '#183551';
-  context.fillText(credit, mapSide - 6, height - 17);
+  var credits = ['© OpenStreetMap contributors'];
+  if (selectedArea && selectedArea.source === 'gisco') credits.unshift('© EuroGeographics for the administrative boundaries. Source: Eurostat');
+  credits.forEach(function (credit, index) {
+    var creditWidth = context.measureText(credit).width + 12;
+    var creditTop = height - 20 * (credits.length - index);
+    context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    context.fillRect(mapSide - creditWidth, creditTop, creditWidth, 20);
+    context.fillStyle = '#183551';
+    context.fillText(credit, mapSide - 6, creditTop + 3);
+  });
 
   // The figures, left-aligned in the right-hand panel.
   context.textAlign = 'left';
@@ -983,6 +1079,7 @@ function changeMode(nextMode) {
   else url.searchParams.delete('mode');
   history.replaceState({}, '', url);
   renderResult();
+  if (pickingArea && selectedArea && areaTrail.length) renderAreaLinks();
 }
 document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
 document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
@@ -1006,6 +1103,12 @@ var reloadControl = L.Control.extend({
       L.DomEvent.preventDefault(event);
       if (pendingRequest) pendingRequest.abort();
       selectedPoint = null;
+      selectedArea = null;
+      selectedAreaLevel = null;
+      clearAreaOutlines();
+      setAreaBoundaryCredit(null);
+      document.getElementById('areaparents').hidden = true;
+      document.getElementById('areaparents').textContent = '';
       shapeCorners = [];
       shapeFinished = false;
       document.getElementById('finishshape').disabled = true;
@@ -1014,7 +1117,7 @@ var reloadControl = L.Control.extend({
       lastResult = null;
       renderResult();
       document.getElementById('table').textContent = '';
-      document.getElementById('status').textContent = drawingShape ? 'Click the map to add corners.' : 'Click on the map to calculate.';
+      document.getElementById('status').textContent = pickingArea ? 'Click the map to pick an area.' : drawingShape ? 'Click the map to add corners.' : 'Click on the map to calculate.';
       history.replaceState({}, '', location.pathname + (mode === 'population' ? '' : '?mode=' + mode));
     });
     return container;
@@ -1058,6 +1161,10 @@ async function requestData(latitude, longitude) {
   }
 }
 map.on('click', function (event) {
+  if (pickingArea) {
+    pickAreaAt(event.latlng.lat, event.latlng.wrap().lng);
+    return;
+  }
   if (drawingShape) {
     addShapeCorner([event.latlng.lat, Math.max(-180, Math.min(180, event.latlng.wrap().lng))]);
     return;
@@ -1068,7 +1175,7 @@ map.on('click', function (event) {
 });
 map.on('zoomend', function () {
   var url = new URL(location.href);
-  if (url.searchParams.has('lat') || url.searchParams.has('shape')) {
+  if (url.searchParams.has('lat') || url.searchParams.has('shape') || url.searchParams.has('area')) {
     url.searchParams.set('zoom', map.getZoom());
     history.replaceState({}, '', url);
   }
@@ -1085,7 +1192,289 @@ var drawingShape = false;
 var shapeCorners = [];
 var shapeFinished = false;
 var MAXIMUM_SHAPE_CORNERS = 100;
+function pointInAreaRing(longitude, latitude, ring) {
+  var inside = false;
+  for (var current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+    var a = ring[current], b = ring[previous];
+    if ((a[1] > latitude) !== (b[1] > latitude) && longitude < (b[0] - a[0]) * (latitude - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+function areaContainsPoint(area, longitude, latitude) {
+  var polygons = area.geometry.type === 'Polygon' ? [area.geometry.coordinates] : area.geometry.coordinates;
+  return polygons.some(function (polygon) {
+    return pointInAreaRing(longitude, latitude, polygon[0]) && !polygon.slice(1).some(function (hole) {
+      return pointInAreaRing(longitude, latitude, hole);
+    });
+  });
+}
+async function loadAreaFile(path, signal, missingOkay) {
+  if (areaFileCache.has(path)) return areaFileCache.get(path).data;
+  var response = await fetch(areaFilesBase + path, { signal: signal });
+  if (response.status === 404 && missingOkay) return null;
+  if (!response.ok) throw new Error('Could not load area data (' + response.status + ').');
+  var text = path.endsWith('.gz')
+    ? await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).text()
+    : await response.text();
+  var data = JSON.parse(text), bytes = text.length * 2;
+  while (areaFileCache.size && (areaFileCache.size >= 64 || areaFileCacheBytes + bytes > 64 * 1024 * 1024)) {
+    var oldest = areaFileCache.keys().next().value;
+    areaFileCacheBytes -= areaFileCache.get(oldest).bytes;
+    areaFileCache.delete(oldest);
+  }
+  if (bytes <= 64 * 1024 * 1024) {
+    areaFileCache.set(path, { data: data, bytes: bytes });
+    areaFileCacheBytes += bytes;
+  }
+  return data;
+}
+async function loadNamedArea(reference, signal) {
+  var file = await loadAreaFile(reference.file, signal);
+  return file.areas[reference.id];
+}
+function areaLevelRank(level) {
+  return { lau: 0, place: 0, nuts3: 1, county: 1, nuts2: 2, state: 2, nuts1: 3, country: 4 }[level];
+}
+async function findNamedAreasAt(latitude, longitude, signal) {
+  var manifest = await loadAreaFile('manifest.json', signal);
+  var degrees = manifest.tile_degrees;
+  var path = 'tiles/' + (Math.floor(longitude / degrees) * degrees) + '_' + (Math.floor(latitude / degrees) * degrees) + '.json.gz';
+  var tile = await loadAreaFile(path, signal, true);
+  var matches = tile ? tile.features.filter(function (feature) { return areaContainsPoint(feature, longitude, latitude); }) : [];
+  matches.sort(function (a, b) { return areaLevelRank(a.properties.level) - areaLevelRank(b.properties.level); });
+  return matches.map(function (feature) { return feature.properties; });
+}
+function chooseNamedArea(references, level, linkedId) {
+  return references.find(function (reference) { return reference.id === linkedId; }) ||
+    references.find(function (reference) { return reference.level === level; }) ||
+    references.find(function (reference) { return areaLevelRank(reference.level) >= areaLevelRank(level); }) || references[0];
+}
+function preferredAreaLevel(previous, reference, explicitChoice) {
+  return explicitChoice || !previous ? reference.level : previous;
+}
+function mainAreaBounds(geometry) {
+  var polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  var parts = polygons.map(function (polygon) {
+    var ring = polygon[0], area = 0, bounds = [Infinity, Infinity, -Infinity, -Infinity];
+    ring.forEach(function (coordinate, index) {
+      var next = ring[(index + 1) % ring.length];
+      area += coordinate[0] * next[1] - next[0] * coordinate[1];
+      bounds[0] = Math.min(bounds[0], coordinate[0]); bounds[1] = Math.min(bounds[1], coordinate[1]);
+      bounds[2] = Math.max(bounds[2], coordinate[0]); bounds[3] = Math.max(bounds[3], coordinate[1]);
+    });
+    return { area: Math.abs(area), bounds: bounds };
+  }).sort(function (a, b) { return b.area - a.area; });
+  var main = parts[0].bounds, longitudeScale = Math.cos((main[1] + main[3]) / 2 * Math.PI / 180);
+  var nearby = Math.hypot((main[2] - main[0]) * longitudeScale, main[3] - main[1]) / 4;
+  var result = main.slice();
+  parts.slice(1).forEach(function (part) {
+    var bounds = part.bounds;
+    var gap = Math.hypot(Math.max(main[0] - bounds[2], bounds[0] - main[2], 0) * longitudeScale,
+      Math.max(main[1] - bounds[3], bounds[1] - main[3], 0));
+    if (gap <= nearby) {
+      result[0] = Math.min(result[0], bounds[0]); result[1] = Math.min(result[1], bounds[1]);
+      result[2] = Math.max(result[2], bounds[2]); result[3] = Math.max(result[3], bounds[3]);
+    }
+  });
+  return result;
+}
+function planAreaOutlines(index, bounds, level) {
+  var levels = Object.keys(index.levels).filter(function (candidate) { return areaLevelRank(candidate) === areaLevelRank(level || 'lau'); });
+  var degrees = index.tile_degrees, files = [], count = 0;
+  levels.forEach(function (candidate) {
+    Object.keys(index.levels[candidate]).forEach(function (key) {
+      var coordinate = key.split('_').map(Number);
+      if (coordinate[0] >= bounds[2] || coordinate[0] + degrees <= bounds[0] || coordinate[1] >= bounds[3] || coordinate[1] + degrees <= bounds[1]) return;
+      var tile = index.levels[candidate][key];
+      files.push(tile.file); count += tile.count;
+    });
+  });
+  return { files: files.length > 64 || count > 1200 ? [] : files, count: count, skipped: files.length > 64 || count > 1200 };
+}
+function areaOutlineStyle(id, hoveredId) {
+  return { pane: 'areaOutlines', color: '#183551', weight: id === hoveredId ? 3 : 1.5, opacity: id === hoveredId ? 0.9 : 0.6, dashArray: id === hoveredId ? null : '4 3', interactive: false };
+}
+function showAreaControls() {
+  showShapeControls(false);
+  pickingArea = true;
+  document.getElementById('circlecontrols').hidden = true;
+  document.getElementById('areacontrols').hidden = false;
+  document.getElementById('status').textContent = 'Click the map to pick an area.';
+  renderResult();
+  scheduleAreaOutlines();
+}
+function clearAreaOutlines() {
+  if (pendingAreaOutlines) pendingAreaOutlines.abort();
+  clearTimeout(areaOutlineTimer);
+  areaOutlinesLayer.clearLayers();
+  areaHitsLayer.clearLayers();
+  hoveredAreaId = null;
+  viewportHasGisco = false;
+  setAreaBoundaryCredit(selectedArea);
+  document.getElementById('areaoutlinestatus').hidden = true;
+}
+function highlightAreaOutline(id) {
+  hoveredAreaId = id;
+  areaOutlinesLayer.eachLayer(function (collection) {
+    collection.setStyle(function (feature) { return areaOutlineStyle(feature.properties.id, id); });
+  });
+}
+function scheduleAreaOutlines() {
+  clearTimeout(areaOutlineTimer);
+  if (pickingArea) areaOutlineTimer = setTimeout(refreshAreaOutlines, 120);
+}
+async function refreshAreaOutlines() {
+  if (!pickingArea) return;
+  if (pendingAreaOutlines) pendingAreaOutlines.abort();
+  var controller = new AbortController();
+  pendingAreaOutlines = controller;
+  var status = document.getElementById('areaoutlinestatus');
+  try {
+    var manifest = await loadAreaFile('manifest.json', controller.signal);
+    var index = await loadAreaFile(manifest.viewport.index, controller.signal);
+    var view = map.getBounds();
+    var plan = planAreaOutlines(index, [view.getWest(), view.getSouth(), view.getEast(), view.getNorth()], selectedArea ? selectedArea.level : selectedAreaLevel);
+    if (controller.signal.aborted) return;
+    areaOutlinesLayer.clearLayers(); areaHitsLayer.clearLayers(); hoveredAreaId = null;
+    viewportHasGisco = false;
+    setAreaBoundaryCredit(selectedArea);
+    status.hidden = !plan.skipped;
+    status.textContent = plan.skipped ? 'Zoom in to see area outlines.' : '';
+    if (plan.skipped) return;
+    var shards = await Promise.all(plan.files.map(function (file) { return loadAreaFile(file, controller.signal); }));
+    if (controller.signal.aborted || !pickingArea) return;
+    viewportHasGisco = shards.some(function (shard) {
+      return shard.features.some(function (feature) { return feature.properties.source === 'gisco'; });
+    });
+    setAreaBoundaryCredit(selectedArea);
+    shards.forEach(function (shard) {
+      L.geoJSON(shard.outlines, {
+        pane: 'areaOutlines', renderer: areaOutlineRenderer, interactive: false,
+        style: function (feature) { return areaOutlineStyle(feature.properties.id, hoveredAreaId); },
+      }).addTo(areaOutlinesLayer);
+      L.geoJSON(shard, {
+        pane: 'areaHits', renderer: areaHitRenderer, style: { stroke: false, fillOpacity: 0 },
+        onEachFeature: function (feature, layer) {
+          layer.on('mouseover', function () { highlightAreaOutline(feature.properties.id); });
+          layer.on('mouseout', function () { highlightAreaOutline(null); });
+        },
+      }).addTo(areaHitsLayer);
+    });
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      status.hidden = false;
+      status.textContent = 'Area outlines could not load. Click the map to pick an area.';
+    }
+  }
+}
+map.on('moveend', scheduleAreaOutlines);
+function setAreaBoundaryCredit(area) {
+  if (areaBoundaryCredit) map.attributionControl.removeAttribution(areaBoundaryCredit);
+  areaBoundaryCredit = (area && area.source === 'gisco') || viewportHasGisco ? '&copy; EuroGeographics for the administrative boundaries. Source: Eurostat' : '';
+  if (areaBoundaryCredit) map.attributionControl.addAttribution(areaBoundaryCredit);
+}
+function areaLink(id) {
+  var link = new URLSearchParams({ area: id, areaLat: areaClick[0].toFixed(5), areaLong: areaClick[1].toFixed(5), zoom: map.getZoom() });
+  if (mode !== 'population') link.set('mode', mode);
+  return '?' + link;
+}
+function renderAreaLinks() {
+  var navigation = document.getElementById('areaparents');
+  navigation.textContent = '';
+  navigation.hidden = false;
+  areaTrail.forEach(function (reference, index) {
+    if (index) navigation.appendChild(document.createTextNode(' › '));
+    var link = document.createElement('a');
+    link.textContent = reference.name;
+    link.href = areaLink(reference.id);
+    if (reference.id === selectedArea.id) link.setAttribute('aria-current', 'true');
+    link.addEventListener('click', function (event) {
+      event.preventDefault();
+      selectNamedArea(reference);
+    });
+    navigation.appendChild(link);
+    var levelName = { lau: 'municipality', place: 'city', county: 'county', state: 'state', nuts3: 'NUTS 3', nuts2: 'NUTS 2', nuts1: 'NUTS 1' }[reference.level];
+    if (levelName && !(reference.level === 'county' && / County$/.test(reference.name))) {
+      var label = document.createElement('small');
+      label.textContent = ' ' + levelName;
+      navigation.appendChild(label);
+    }
+  });
+}
+async function selectNamedArea(reference, controller) {
+  var explicitChoice = !controller;
+  if (!controller) {
+    if (pendingRequest) pendingRequest.abort();
+    controller = new AbortController();
+    pendingRequest = controller;
+  }
+  lastResult = null;
+  renderResult();
+  document.getElementById('status').textContent = 'Loading area…';
+  try {
+    var area = await loadNamedArea(reference, controller.signal);
+    if (controller.signal.aborted) return;
+    selectedArea = area;
+    selectedAreaLevel = preferredAreaLevel(selectedAreaLevel, reference, explicitChoice);
+    setAreaBoundaryCredit(area);
+    CirclesLayer.clearLayers();
+    L.geoJSON(area.geometry, { interactive: false }).addTo(CirclesLayer);
+    var mainBounds = mainAreaBounds(area.geometry);
+    var bounds = L.latLngBounds([mainBounds[1], mainBounds[0]], [mainBounds[3], mainBounds[2]]);
+    var size = map.getSize(), side = Math.min(size.x, size.y);
+    var padding = L.point((size.x - side) / 2 + 24, (size.y - side) / 2 + 24);
+    map.fitBounds(bounds, { padding: padding });
+    var centre = bounds.getCenter();
+    selectedPoint = [centre.lat, centre.lng];
+    lastResult = Object.assign({}, area.totals, {
+      area_name: area.name, cumulative: [],
+      gdp_per_head: area.totals.population > 0 ? area.totals.gdp / area.totals.population : null,
+    });
+    history.replaceState({}, '', areaLink(area.id));
+    renderAreaLinks();
+    renderResult();
+    document.getElementById('status').textContent = '';
+    scheduleAreaOutlines();
+  } catch (error) {
+    if (error.name !== 'AbortError') document.getElementById('status').textContent = 'Could not load the area: ' + error.message;
+  }
+}
+async function pickAreaAt(latitude, longitude, linkedId) {
+  if (pendingRequest) pendingRequest.abort();
+  var controller = new AbortController();
+  pendingRequest = controller;
+  areaClick = [latitude, longitude];
+  areaTrail = [];
+  selectedArea = null;
+  setAreaBoundaryCredit(null);
+  lastResult = null;
+  CirclesLayer.clearLayers();
+  document.getElementById('areaparents').hidden = true;
+  renderResult();
+  document.getElementById('status').textContent = 'Finding an area…';
+  try {
+    areaTrail = await findNamedAreasAt(latitude, longitude, controller.signal);
+    if (controller.signal.aborted) return;
+    if (!areaTrail.length) {
+      document.getElementById('status').textContent = 'No named area is available here. Try a point in Europe or the United States.';
+      return;
+    }
+    var reference = chooseNamedArea(areaTrail, selectedAreaLevel, linkedId);
+    await selectNamedArea(reference, controller);
+  } catch (error) {
+    if (error.name !== 'AbortError') document.getElementById('status').textContent = 'Could not find an area: ' + error.message;
+  }
+}
 function showShapeControls(showShape) {
+  pickingArea = false;
+  clearAreaOutlines();
+  selectedAreaLevel = null;
+  selectedArea = null;
+  setAreaBoundaryCredit(null);
+  areaTrail = [];
+  document.getElementById('areacontrols').hidden = true;
+  document.getElementById('areaparents').hidden = true;
+  document.getElementById('areaparents').textContent = '';
   drawingShape = showShape;
   document.getElementById('circlecontrols').hidden = showShape;
   document.getElementById('shapecontrols').hidden = !showShape;
@@ -1151,7 +1540,16 @@ async function finishShape() {
 }
 document.getElementById('drawshape').addEventListener('click', function () { showShapeControls(true); });
 document.getElementById('backtocircle').addEventListener('click', function () { showShapeControls(false); });
+document.getElementById('pickarea').addEventListener('click', showAreaControls);
+document.getElementById('areabacktocircle').addEventListener('click', function () { showShapeControls(false); });
 document.getElementById('finishshape').addEventListener('click', finishShape);
+if (params.has('area') && params.has('areaLat') && params.has('areaLong')) {
+  var areaLatitude = Number(params.get('areaLat')), areaLongitude = Number(params.get('areaLong'));
+  if (Number.isFinite(areaLatitude) && Math.abs(areaLatitude) <= 90 && Number.isFinite(areaLongitude) && Math.abs(areaLongitude) <= 180) {
+    showAreaControls();
+    pickAreaAt(areaLatitude, areaLongitude, params.get('area'));
+  }
+}
 if (params.has('shape')) {
   var linkedCorners = params.get('shape').split(';').map(function (pair) { return pair.split(',').map(Number); });
   if (linkedCorners.length >= 3 && linkedCorners.every(function (corner) { return corner.length === 2 && corner.every(Number.isFinite); })) {

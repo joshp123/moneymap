@@ -1,16 +1,16 @@
 // Written by AI on 2026.10.16 by model gpt-6.1-sol; reorganised by model claude opus 5.5.
-// Syncs data/layers/ and places/cities.json: uploads changed files and deletes obsolete tiles.
-//   node deploy/sync-tiles.mjs <site origin> [layer|places ...] [--dry-run]
-// Defaults to all layers and places. --dry-run reports changes without applying them.
+// Syncs data/layers/, data/areas/ and places/cities.json: uploads changed files and deletes obsolete objects.
+//   node deploy/sync-tiles.mjs <site origin> [layer|places|areas ...] [--dry-run]
+// Defaults to all layers, areas and places. --dry-run reports changes without applying them.
 // Enter one JSON line on hidden stdin: {"uploadToken": "..."}, plus "siteAccessToken" for a private Site.
 // A tile is unchanged when R2's etag, the MD5 of its bytes, equals the MD5 of the local file.
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const LAYERS = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
-const DATA_SETS = [...LAYERS, 'places'];
+const DATA_SETS = [...LAYERS, 'places', 'areas'];
 const TILE_BYTES = 120 * 120 * 4;
 const dataDirectory = resolve(import.meta.dirname, '../data');
 const [originArgument, ...rest] = process.argv.slice(2);
@@ -25,6 +25,13 @@ if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('Expected an
 
 async function localDataKeys(layer) {
   if (layer === 'places') return ['places/cities.json'];
+  if (layer === 'areas') {
+    const entries = await readdir(join(dataDirectory, 'areas'), { recursive: true, withFileTypes: true });
+    const keys = entries.filter(entry => entry.isFile())
+      .map(entry => relative(dataDirectory, join(entry.parentPath, entry.name))).sort();
+    if (!keys.includes('areas/manifest.json')) throw new Error('data/areas/manifest.json is missing; build named areas first');
+    return keys;
+  }
   const keys = [];
   for (const row of await readdir(join(dataDirectory, 'layers', layer))) {
     if (!/^\d+$/.test(row)) continue;
@@ -88,7 +95,7 @@ async function request(path, method, body) {
 }
 
 async function remoteTileEtags(layer) {
-  const response = await request(layer === 'places' ? 'places/' : `layers/${layer}/`, 'GET');
+  const response = await request(['places', 'areas'].includes(layer) ? `${layer}/` : `layers/${layer}/`, 'GET');
   if (!response.ok) throw new Error(`Listing ${layer}: ${response.status}. Is the current Worker deployed?`);
   return response.json();
 }
@@ -101,7 +108,8 @@ for (const layer of dataSets) {
   const uploads = [];
   for (const key of localKeys) {
     const bytes = await readFile(join(dataDirectory, key));
-    if (layer !== 'places' && bytes.length !== TILE_BYTES) throw new Error(`Unexpected tile size: ${key}`);
+    if (LAYERS.includes(layer) && bytes.length !== TILE_BYTES) throw new Error(`Unexpected tile size: ${key}`);
+    if (layer === 'areas' && bytes.length > 20_000_000) throw new Error(`Area file exceeds 20 MB: ${key}`);
     if (remoteEtags[key] !== createHash('md5').update(bytes).digest('hex')) uploads.push(key);
   }
   const deletions = Object.keys(remoteEtags).filter(key => !local.has(key));

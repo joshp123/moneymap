@@ -1,4 +1,4 @@
-Written by AI on 2026.10.16 by model claude opus 5.5; land and building split updated on 2026.10.17 by model gpt-6.1-sol.
+Written by AI on 2026.10.16 by model claude opus 5.5; land and building split updated on 2026.10.17 by model gpt-6.1-sol; shapes and named areas added on 2026.10.17 by model claude opus 5.5.
 
 # How the numbers are calculated
 
@@ -24,6 +24,10 @@ We publish the method, the test results and the known errors so that others can 
 ## Reading a result
 
 **The circle.** The site divides the world into cells of 30 arc-seconds (1/120 of a degree). A cell is about 0.93 km from north to south, and narrower from east to west away from the equator: 0.58 km in London. A circle's total is the sum of every cell whose centre lies within the chosen distance of the clicked point, measured along the Earth's surface. The table under the map gives the same sums within each whole kilometre. The radius runs from 3 to 100 km. Tom Forth's site has the same 3 km minimum, because small city-centre circles are likely to be wrong. Circles of 1 and 2 km appear only as rows of that table; the 1 and 2 km figures on this page are such rows from a 3 km circle.
+
+**Shapes.** A drawn shape's total is the sum of every cell whose centre lies inside it, the same rule as the circle. A shape traced around a 10 km circle gives exactly the circle's totals.
+
+**Named areas.** In Europe you can pick a municipality, a NUTS 3, 2 or 1 region or a country, using Eurostat's 2024 boundaries. In the US you can pick a city, county, state or the country, using the Census Bureau's 2025 boundaries. An area's total is the sum of the cells whose centres lie inside it, the rule the grid itself was built with. So regions that were inputs to the grid come back as their official figures: every US county is within 0.8% of its official GDP, and NUTS 3 regions match Eurostat except Cyprus (the grid includes the north) and Guadeloupe (the grid includes French Saint Martin). Below those levels, municipalities and cities get our modelled share of their region. Cells cut by a coast or border go wholly to one area, so areas smaller than about 20 km² are rough, and 43 European municipalities and 1,339 US places own no cell centre at all and cannot be picked. US cities do not cover the whole country: a click in unincorporated land picks the county. New York City reads 0.8% below the sum of its five counties, because 48 coastal cells count towards the counties but not the city.
 
 **Units.** GDP uses purchasing power parity (PPP): each currency is converted at the rate that buys the same goods and services as a US dollar buys in the US. The result is called international dollars. Kummu's release, the source of every country's GDP total, labels its unit 2021 international dollars. But its 2024 totals agree within 1% to 2% with the World Bank's GDP at PPP in current 2024 international dollars, so the figures behave like 2024 PPP dollars:
 
