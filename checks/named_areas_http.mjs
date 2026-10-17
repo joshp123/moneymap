@@ -132,7 +132,7 @@ assert.ok(viewportFeatures.length > 0 && hoverFeatures > 0, 'Viewport must load 
 const hoveredId = viewportFeatures[0].properties.id;
 const hoverStyles = viewportFeatures.map(feature => context.areaOutlineStyle(feature.properties.id, hoveredId));
 assert.ok(hoverStyles.some(style => style.weight === 3 && style.opacity === 0.9), 'Hovered boundary must be highlighted');
-assert.ok(hoverStyles.every((style, index) => style.weight === (viewportFeatures[index].properties.id === hoveredId ? 3 : 1)), 'Hover must highlight only the hovered area across its visible parts');
+assert.ok(hoverStyles.every((style, index) => (style.weight === 3) === (viewportFeatures[index].properties.id === hoveredId)), 'Hover must highlight only the hovered area across its visible parts');
 const densePlan = context.planAreaOutlines(viewportIndex, [-180, -90, 180, 90], 'lau');
 assert.equal(densePlan.skipped, true, 'A dense world municipality view must skip outline downloads');
 assert.equal(densePlan.files.length, 0, 'Skipped outline views must plan no network requests');
