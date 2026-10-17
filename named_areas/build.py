@@ -218,6 +218,14 @@ def boundary_line_geometry(geometry):
     return shapely.union_all(lines)
 
 
+def approximate_area_km2(geometry):
+    """Area on an equal-area sinusoidal projection; close enough to order nested areas by size."""
+    def project(coordinates):
+        longitude, latitude = coordinates[:, 0], coordinates[:, 1]
+        return np.column_stack([longitude * np.cos(np.radians(latitude)), latitude]) * 111.195
+    return shapely.transform(geometry, project).area
+
+
 def write_artifacts(boundaries, metadata, totals, reports, hierarchy, sources):
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / 'LICENCE.md').write_bytes((ROOT / 'named_areas/LICENCE.md').read_bytes())
@@ -241,7 +249,8 @@ def write_artifacts(boundaries, metadata, totals, reports, hierarchy, sources):
             current, size, number = {}, 0, number+1
         current[identifier] = record
         size += record_size
-        references[identifier] = dict(id=identifier, name=record['name'], level=record['level'], file=f'records/{number}.json.gz')
+        references[identifier] = dict(id=identifier, name=record['name'], level=record['level'], file=f'records/{number}.json.gz',
+            km2=round(approximate_area_km2(boundaries[identifier].geometry), 1))
     if current:
         batches.append((f'records/{number}.json.gz', current))
     sizes = {}

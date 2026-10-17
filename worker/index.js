@@ -687,9 +687,9 @@ const page = `<!doctype html>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
 <button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button> <button type="button" class="link-button" id="pickarea">Or pick an area</button></p>
+<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button> <button type="button" class="link-button" id="pickarea">Or pick an area</button> <button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button></p>
 <p class="controls" id="shapecontrols" hidden>Click the map to add corners, then <button type="button" id="finishshape" disabled>Finish shape</button> <button type="button" class="link-button" id="backtocircle">Back to circles</button></p>
-<p class="controls" id="areacontrols" hidden>Click the map to pick an area, then step up with the links below. <button type="button" class="link-button" id="areabacktocircle">Back to circles</button></p>
+<p class="controls" id="areacontrols" hidden>Click the map to pick an area, then step up with the links below. <button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button> <button type="button" class="link-button" id="areabacktocircle">Back to circles</button></p>
 <nav class="controls" id="areaparents" aria-label="Containing areas" hidden></nav>
 <p class="controls" id="areaoutlinestatus" role="status" hidden></p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
@@ -1079,7 +1079,7 @@ function changeMode(nextMode) {
   else url.searchParams.delete('mode');
   history.replaceState({}, '', url);
   renderResult();
-  if (pickingArea && selectedArea && areaTrail.length) renderAreaLinks();
+  if (areaTrail.length) renderAreaLinks();
 }
 document.getElementById('populationmode').addEventListener('click', function () { changeMode('population'); });
 document.getElementById('gdpmode').addEventListener('click', function () { changeMode('gdp'); });
@@ -1172,6 +1172,7 @@ map.on('click', function (event) {
   selectedPoint = [event.latlng.lat, Math.max(-180, Math.min(180, event.latlng.wrap().lng))];
   drawcircles(selectedPoint[0], selectedPoint[1]);
   requestData(selectedPoint[0], selectedPoint[1]);
+  showAreasAroundCircle(selectedPoint[0], selectedPoint[1]);
 });
 map.on('zoomend', function () {
   var url = new URL(location.href);
@@ -1232,6 +1233,11 @@ async function loadNamedArea(reference, signal) {
   var file = await loadAreaFile(reference.file, signal);
   return file.areas[reference.id];
 }
+// The census names New York City's boroughs by their county names; people know them as boroughs.
+var NEW_YORK_BOROUGHS = { 'us-county-36061': 'Manhattan', 'us-county-36047': 'Brooklyn', 'us-county-36081': 'Queens', 'us-county-36005': 'The Bronx', 'us-county-36085': 'Staten Island' };
+function areaDisplayName(area) {
+  return NEW_YORK_BOROUGHS[area.id] ? NEW_YORK_BOROUGHS[area.id] + ' (' + area.name + ')' : area.name;
+}
 function areaLevelRank(level) {
   return { lau: 0, place: 0, nuts3: 1, county: 1, nuts2: 2, state: 2, nuts1: 3, country: 4 }[level];
 }
@@ -1241,7 +1247,9 @@ async function findNamedAreasAt(latitude, longitude, signal) {
   var path = 'tiles/' + (Math.floor(longitude / degrees) * degrees) + '_' + (Math.floor(latitude / degrees) * degrees) + '.json.gz';
   var tile = await loadAreaFile(path, signal, true);
   var matches = tile ? tile.features.filter(function (feature) { return areaContainsPoint(feature, longitude, latitude); }) : [];
-  matches.sort(function (a, b) { return areaLevelRank(a.properties.level) - areaLevelRank(b.properties.level); });
+  matches.sort(function (a, b) {
+    return (a.properties.km2 || 0) - (b.properties.km2 || 0) || areaLevelRank(a.properties.level) - areaLevelRank(b.properties.level);
+  });
   return matches.map(function (feature) { return feature.properties; });
 }
 function chooseNamedArea(references, level, linkedId) {
@@ -1292,7 +1300,7 @@ function planAreaOutlines(index, bounds, level) {
   return { files: files.length > 64 || count > 1200 ? [] : files, count: count, skipped: files.length > 64 || count > 1200 };
 }
 function areaOutlineStyle(id, hoveredId) {
-  return { pane: 'areaOutlines', color: '#183551', weight: id === hoveredId ? 3 : 1.5, opacity: id === hoveredId ? 0.9 : 0.6, dashArray: id === hoveredId ? null : '4 3', interactive: false };
+  return { pane: 'areaOutlines', color: '#183551', weight: id === hoveredId ? 2.5 : 1, opacity: id === hoveredId ? 0.9 : 0.45, dashArray: id === hoveredId ? null : '4 3', interactive: false };
 }
 function showAreaControls() {
   showShapeControls(false);
@@ -1381,15 +1389,26 @@ function areaLink(id) {
 function renderAreaLinks() {
   var navigation = document.getElementById('areaparents');
   navigation.textContent = '';
-  navigation.hidden = false;
+  navigation.hidden = !areaTrail.length;
+  if (!pickingArea) {
+    var prefix = document.createElement('small');
+    prefix.textContent = 'Areas here: ';
+    navigation.appendChild(prefix);
+  }
   areaTrail.forEach(function (reference, index) {
     if (index) navigation.appendChild(document.createTextNode(' › '));
     var link = document.createElement('a');
-    link.textContent = reference.name;
+    link.textContent = areaDisplayName(reference);
     link.href = areaLink(reference.id);
-    if (reference.id === selectedArea.id) link.setAttribute('aria-current', 'true');
+    if (selectedArea && reference.id === selectedArea.id) link.setAttribute('aria-current', 'true');
     link.addEventListener('click', function (event) {
       event.preventDefault();
+      if (!pickingArea) {
+        var trail = areaTrail, click = areaClick;
+        showAreaControls();
+        areaTrail = trail;
+        areaClick = click;
+      }
       selectNamedArea(reference);
     });
     navigation.appendChild(link);
@@ -1427,7 +1446,7 @@ async function selectNamedArea(reference, controller) {
     var centre = bounds.getCenter();
     selectedPoint = [centre.lat, centre.lng];
     lastResult = Object.assign({}, area.totals, {
-      area_name: area.name, cumulative: [],
+      area_name: areaDisplayName(area), cumulative: [],
       gdp_per_head: area.totals.population > 0 ? area.totals.gdp / area.totals.population : null,
     });
     history.replaceState({}, '', areaLink(area.id));
@@ -1437,6 +1456,22 @@ async function selectNamedArea(reference, controller) {
     scheduleAreaOutlines();
   } catch (error) {
     if (error.name !== 'AbortError') document.getElementById('status').textContent = 'Could not load the area: ' + error.message;
+  }
+}
+var circleAreasRequest = null;
+async function showAreasAroundCircle(latitude, longitude) {
+  if (circleAreasRequest) circleAreasRequest.abort();
+  var controller = new AbortController();
+  circleAreasRequest = controller;
+  document.getElementById('areaparents').hidden = true;
+  try {
+    var references = await findNamedAreasAt(latitude, longitude, controller.signal);
+    if (controller.signal.aborted || pickingArea || drawingShape) return;
+    areaClick = [latitude, longitude];
+    areaTrail = references;
+    renderAreaLinks();
+  } catch (error) {
+    if (error.name !== 'AbortError') console.warn('Areas for the circle could not load', error);
   }
 }
 async function pickAreaAt(latitude, longitude, linkedId) {
@@ -1543,6 +1578,30 @@ document.getElementById('backtocircle').addEventListener('click', function () { 
 document.getElementById('pickarea').addEventListener('click', showAreaControls);
 document.getElementById('areabacktocircle').addEventListener('click', function () { showShapeControls(false); });
 document.getElementById('finishshape').addEventListener('click', finishShape);
+function useMyLocation() {
+  var status = document.getElementById('status');
+  if (!navigator.geolocation) {
+    status.textContent = 'This browser cannot share its location.';
+    return;
+  }
+  status.textContent = 'Asking for your location. moneymap rounds it to about 1 km and never stores it.';
+  navigator.geolocation.getCurrentPosition(function (position) {
+    var latitude = Math.round(position.coords.latitude * 100) / 100;
+    var longitude = Math.round(position.coords.longitude * 100) / 100;
+    if (pickingArea) {
+      map.setView([latitude, longitude], 11);
+      pickAreaAt(latitude, longitude);
+      return;
+    }
+    selectedPoint = [latitude, longitude];
+    drawcircles(latitude, longitude);
+    requestData(latitude, longitude);
+    showAreasAroundCircle(latitude, longitude);
+  }, function (error) {
+    status.textContent = 'Could not get your location: ' + error.message;
+  }, { timeout: 15000, maximumAge: 600000 });
+}
+document.querySelectorAll('.use-location').forEach(function (button) { button.addEventListener('click', useMyLocation); });
 if (params.has('area') && params.has('areaLat') && params.has('areaLong')) {
   var areaLatitude = Number(params.get('areaLat')), areaLongitude = Number(params.get('areaLong'));
   if (Number.isFinite(areaLatitude) && Math.abs(areaLatitude) <= 90 && Number.isFinite(areaLongitude) && Math.abs(areaLongitude) <= 180) {
@@ -1571,6 +1630,7 @@ if (['lat', 'long', 'distance_km'].every(function (name) { return params.has(nam
     selectedPoint = [latitude, longitude];
     drawcircles(latitude, longitude, Number.isFinite(zoom) ? zoom : undefined);
     requestData(latitude, longitude);
+    showAreasAroundCircle(latitude, longitude);
   }
 }
 </script>

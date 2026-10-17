@@ -43,12 +43,11 @@ const locations = [
   { name: 'Annecy', latitude: 45.8992, longitude: 6.1294, expected: /^Annecy$/i, country: /France/i },
   { name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, expected: /San Francisco/i, country: /United States/i },
   { name: 'Austin', latitude: 30.2672, longitude: -97.7431, expected: /^Austin(?: city)?$/i, country: /United States/i },
-  { name: 'Manhattan', latitude: 40.7831, longitude: -73.9712, expected: /^New York(?: city)?$/i, country: /United States/i },
+  { name: 'Manhattan', latitude: 40.7831, longitude: -73.9712, expected: /^New York County$/i, country: /United States/i },
   { name: 'Davis', latitude: 38.5449, longitude: -121.7405, expected: /^Davis(?: city)?$/i, country: /United States/i },
   { name: 'Rural Yolo County', latitude: 38.8, longitude: -121.85, expected: /^Yolo(?: County)?$/i, country: /United States/i, level: 'county' },
 ];
 const layerNames = ['population', 'gdp', 'bus_stops', 'tram_stops', 'rail_stops', 'land_value', 'building_value'];
-const levels = { lau: 0, place: 0, nuts3: 1, county: 1, nuts2: 2, state: 2, nuts1: 3, country: 4 };
 const results = [];
 for (const location of locations) {
   const references = await context.findNamedAreasAt(location.latitude, location.longitude);
@@ -57,16 +56,16 @@ for (const location of locations) {
   const selected = await context.loadNamedArea(reference);
   assert.match(selected.name, location.expected, location.name + ': click must pick the expected area');
   if (location.level) assert.equal(selected.level, location.level, location.name + ': rural click must fall back to its county');
-  else assert.ok(['lau', 'place'].includes(selected.level), location.name + ': smallest area must be a municipality or place');
+  assert.equal(reference.km2, Math.min(...references.map(entry => entry.km2)), location.name + ': a click must pick the smallest area containing it');
   const chain = references;
   const areas = [];
-  let previousLevel = -1;
+  let previousSize = 0;
   for (const entry of chain) {
     const area = await context.loadNamedArea(entry);
     assert.equal(area.id, entry.id, 'Referenced area must exist in its record file');
     assert.equal(area.name, entry.name, 'Row label must match its loaded area');
-    assert.ok(levels[area.level] > previousLevel, location.name + ': row levels must progress towards the country');
-    previousLevel = levels[area.level];
+    assert.ok(entry.km2 >= previousSize, location.name + ': row must run from the smallest area to the largest');
+    previousSize = entry.km2;
     assert.ok(['Polygon', 'MultiPolygon'].includes(area.geometry.type), area.name + ': outline must be a polygon');
     assert.ok(['gisco', 'census'].includes(area.source), area.name + ': boundary source must be present for map and share-card credits');
     assert.ok(context.areaContainsPoint(area, location.longitude, location.latitude), area.name + ': full outline must contain the clicked point');
@@ -131,8 +130,9 @@ for (const file of plan.files) {
 assert.ok(viewportFeatures.length > 0 && hoverFeatures > 0, 'Viewport must load visible boundaries and hover hit polygons');
 const hoveredId = viewportFeatures[0].properties.id;
 const hoverStyles = viewportFeatures.map(feature => context.areaOutlineStyle(feature.properties.id, hoveredId));
-assert.ok(hoverStyles.some(style => style.weight === 3 && style.opacity === 0.9), 'Hovered boundary must be highlighted');
-assert.ok(hoverStyles.every((style, index) => (style.weight === 3) === (viewportFeatures[index].properties.id === hoveredId)), 'Hover must highlight only the hovered area across its visible parts');
+const hoveredWeight = Math.max(...hoverStyles.map(style => style.weight));
+assert.ok(hoverStyles.some(style => style.weight === hoveredWeight && style.opacity === 0.9), 'Hovered boundary must be highlighted');
+assert.ok(hoverStyles.every((style, index) => (style.weight === hoveredWeight) === (viewportFeatures[index].properties.id === hoveredId)), 'Hover must highlight only the hovered area across its visible parts');
 const densePlan = context.planAreaOutlines(viewportIndex, [-180, -90, 180, 90], 'lau');
 assert.equal(densePlan.skipped, true, 'A dense world municipality view must skip outline downloads');
 assert.equal(densePlan.files.length, 0, 'Skipped outline views must plan no network requests');
