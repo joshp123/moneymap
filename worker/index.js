@@ -622,20 +622,35 @@ const page = `<!doctype html>
             color: #183551;
         }
 
-        @media (max-width: 500px) {
-            .leaflet-bottom.leaflet-left .methodology-note {
-                margin-bottom: 24px;
-                font-size: 12px;
-            }
-        }
 
         .howitworks {
             margin-top: 1.5em;
         }
 
-        @media (max-width: 400px) {
-            h1 { font-size: 1.6em; }
-            #maincounter { font-size: 2.7em; }
+        #areaparents a, #areaparents a:visited {
+            color: #183551;
+        }
+
+        /* Phones: everything from the title to the result fits on one screen. */
+        @media (max-width: 600px) {
+            html { -webkit-text-size-adjust: 100%; }
+            body { padding: 0 4px; }
+            h1 { font-size: 1.2em; padding: 0.35em 0.2em; }
+            .tagline { font-size: 11px; margin: 0.3em 0.4em; }
+            .mode-switch { margin: 0.3em; }
+            .mode-switch button { min-height: 32px; padding: 0.2em 0.75em; font-size: 14px; }
+            .controls { font-size: 13px; line-height: 1.5; margin: 0.25em 0.3em; }
+            input[type="range"] { width: 130px; }
+            #areaparents { font-size: 13px; line-height: 1.5; }
+            #bringSitesMapHolder { height: 44vh; height: 44svh; }
+            .methodology-note { font-size: 10.5px; line-height: 1.3; padding: 2px 5px; }
+            .leaflet-bottom.leaflet-left .methodology-note { margin-bottom: 18px; margin-left: 4px; }
+            .leaflet-control-attribution { font-size: 9px; }
+            #resultlabel { font-size: 12px; margin: 0.35em 0.4em 0; }
+            #maincounter { font-size: 2.4em; margin: 0.05em 0 0.1em; }
+            #secondarycounter, #stopcounter, #billionairecounter { font-size: 12.5px; margin: 0.2em 0.5em; }
+            .share-image { margin: 0.35em; }
+            #copyimage { font-size: 14px; }
             table { font-size: 12px; }
             .population-table { font-size: 10px; }
         }
@@ -1488,12 +1503,10 @@ async function selectNamedArea(reference, controller) {
     var mainBounds = mainAreaBounds(area.geometry);
     var bounds = L.latLngBounds([mainBounds[1], mainBounds[0]], [mainBounds[3], mainBounds[2]]);
     var size = map.getSize(), side = Math.min(size.x, size.y);
-    if (linkedAreaZoom !== null) {
-      map.setView(bounds.getCenter(), linkedAreaZoom);
-      linkedAreaZoom = null;
-    } else {
-      map.fitBounds(bounds, { padding: L.point((size.x - side) / 2 + 24, (size.y - side) / 2 + 24) });
-    }
+    // A tab opened in the background has no size yet; fall back to the zoom the link was shared at.
+    if (side > 0) map.fitBounds(bounds, { padding: L.point((size.x - side) / 2 + 24, (size.y - side) / 2 + 24) });
+    else map.setView(bounds.getCenter(), linkedAreaZoom !== null ? linkedAreaZoom : 10);
+    linkedAreaZoom = null;
     var centre = bounds.getCenter();
     selectedPoint = [centre.lat, centre.lng];
     lastResult = Object.assign({}, area.totals, {
