@@ -631,28 +631,69 @@ const page = `<!doctype html>
             color: #183551;
         }
 
-        /* Phones: everything from the title to the result fits on one screen. */
+        div.controls {
+            font-size: smaller;
+        }
+
+        .narrow-only {
+            display: none;
+        }
+
+        #areaparents a small {
+            display: inline-block;
+            margin-left: 0.3em;
+        }
+
+        /* Phones: a map-first screen. The header, controls, map and result fill exactly one
+           screen (the map takes whatever height is left), controls become tappable chips and
+           the row of areas scrolls sideways instead of wrapping. */
         @media (max-width: 600px) {
             html { -webkit-text-size-adjust: 100%; }
-            body { padding: 0 4px; }
-            h1 { font-size: 1.2em; padding: 0.35em 0.2em; }
-            .tagline { font-size: 11px; margin: 0.3em 0.4em; }
-            .mode-switch { margin: 0.3em; }
-            .mode-switch button { min-height: 32px; padding: 0.2em 0.75em; font-size: 14px; }
-            .controls { font-size: 13px; line-height: 1.5; margin: 0.25em 0.3em; }
-            input[type="range"] { width: 130px; }
-            #areaparents { font-size: 13px; line-height: 1.5; }
-            #bringSitesMapHolder { height: 44vh; height: 44svh; }
-            .methodology-note { font-size: 10.5px; line-height: 1.3; padding: 2px 5px; }
-            .leaflet-bottom.leaflet-left .methodology-note { margin-bottom: 18px; margin-left: 4px; }
+            body { padding: 0; }
+            .first-screen { display: flex; flex-direction: column; min-height: 100vh; min-height: 100svh; }
+            .first-screen > * { flex-shrink: 0; }
+            h1 { font-size: 17px; padding: 8px 6px 2px; letter-spacing: 0.02em; }
+            .tagline { margin: 0; padding: 0 8px 7px; font-size: 11px; color: #c9d6e3; background: #183551; }
+            .mode-switch { margin: 8px 10px 4px; }
+            .mode-switch button { flex: 1; min-height: 38px; padding: 0 6px; font-size: 15px; }
+            .instruction, .wide-only, .area-separator, .leaflet-control-zoom { display: none; }
+            .narrow-only { display: inline; }
+            div.controls { font-size: 14px; margin: 4px 10px; }
+            .radius { display: flex; align-items: center; gap: 10px; }
+            input[type="range"] { flex: 1; width: auto; max-width: none; height: 32px; margin: 0; }
+            .radius label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+            .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin-top: 4px; }
+            .chips button { flex: none; min-height: 36px; padding: 0 12px; border: 1px solid #b9c7d6; border-radius: 18px;
+                background: white; color: #183551; font-size: 14px; text-decoration: none; }
+            .chips #finishshape { border-color: #183551; }
+            #areaparents { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 4px 0 6px;
+                padding: 0 10px; align-items: center; font-size: 14px; white-space: nowrap; }
+            #areaparents small { font-size: 12.5px; }
+            #areaparents > small { flex: none; color: #555; }
+            #areaparents a { flex: none; display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px;
+                border: 1px solid #b9c7d6; border-radius: 17px; background: white; text-decoration: none; }
+            #areaparents a[aria-current] { background: #183551; border-color: #183551; color: white; }
+            #areaparents a[aria-current] small { color: #c9d6e3; }
+            #areaoutlinestatus { font-size: 12px; margin: 0 10px 4px; }
+            #bringSitesMapHolder { flex: 1 0 200px; height: auto; }
+            #map { border-left: none; border-right: none; }
+            .methodology-note { font-size: 11px; line-height: 1.3; padding: 2px 6px; }
+            .leaflet-bottom.leaflet-left .methodology-note { margin: 0 0 16px 6px; }
             .leaflet-control-attribution { font-size: 9px; }
-            #resultlabel { font-size: 12px; margin: 0.35em 0.4em 0; }
-            #maincounter { font-size: 2.4em; margin: 0.05em 0 0.1em; }
-            #secondarycounter, #stopcounter, #billionairecounter { font-size: 12.5px; margin: 0.2em 0.5em; }
-            .share-image { margin: 0.35em; }
-            #copyimage { font-size: 14px; }
+            #resultlabel { font-size: 12.5px; margin: 8px 10px 0; color: #555; }
+            #maincounter { font-size: 34px; margin: 2px 0 2px; }
+            #secondarycounter, #stopcounter, #billionairecounter { font-size: 13px; line-height: 1.35; margin: 2px 12px; }
+            .share-image { margin: 6px 10px; }
+            #copyimage { min-height: 38px; padding: 0 18px; font-size: 15px; }
+            #status { font-size: 13px; margin: 0 10px 6px; }
+            #status:empty { display: none; }
+            .first-screen { padding-bottom: env(safe-area-inset-bottom); }
             table { font-size: 12px; }
             .population-table { font-size: 10px; }
+        }
+
+        @media (max-width: 389px) {
+            .methodology-note { font-size: 10px; }
         }
 
         ul,
@@ -698,6 +739,7 @@ const page = `<!doctype html>
     </style>
 </head>
 <body>
+<div class="first-screen">
 <h1 id="heading">Population around a point</h1>
 <p class="tagline">&ldquo;This is the worst website I&rsquo;ve seen in my life.&rdquo; Some guy on Twitter, 2026</p>
 <div class="mode-switch" role="group" aria-label="Display">
@@ -705,9 +747,9 @@ const page = `<!doctype html>
 <button type="button" id="gdpmode" aria-pressed="false">GDP</button>
 <button type="button" id="propertymode" aria-pressed="false">Property value</button>
 </div>
-<p class="controls" id="circlecontrols">Pick a radius, then click anywhere on the map: <input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range" id="rangelabel">5</label> km. <button type="button" class="link-button" id="drawshape">Or draw a shape</button> <button type="button" class="link-button" id="pickarea">Or pick an area</button> <button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button></p>
-<p class="controls" id="shapecontrols" hidden>Click the map to add corners, then <button type="button" id="finishshape" disabled>Finish shape</button> <button type="button" class="link-button" id="backtocircle">Back to circles</button></p>
-<p class="controls" id="areacontrols" hidden>Click the map to pick an area, then step up with the links below. <button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button> <button type="button" class="link-button" id="areabacktocircle">Back to circles</button></p>
+<div class="controls" id="circlecontrols"><span class="radius"><span class="instruction">Pick a radius, then click anywhere on the map: </span><input type="range" id="range" min="3" value="5" max="100" step="1" aria-label="Radius in kilometres"> <label for="range"><span id="rangelabel">5</span> km<span class="wide-only">.</span></label></span> <span class="chips"><button type="button" class="link-button" id="drawshape"><span class="wide-only">Or draw</span><span class="narrow-only">Draw</span> a shape</button> <button type="button" class="link-button" id="pickarea"><span class="wide-only">Or pick</span><span class="narrow-only">Pick</span> an area</button> <button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button></span></div>
+<div class="controls" id="shapecontrols" hidden><span class="instruction">Click the map to add corners, then </span><span class="chips"><button type="button" id="finishshape" disabled>Finish shape</button> <button type="button" class="link-button" id="backtocircle">Back to circles</button></span></div>
+<div class="controls" id="areacontrols" hidden><span class="instruction">Click the map to pick an area, then step up with the links below. </span><span class="chips"><button type="button" class="link-button use-location" title="Rounded to about 1 km and never stored">Use my location</button> <button type="button" class="link-button" id="areabacktocircle">Back to circles</button></span></div>
 <nav class="controls" id="areaparents" aria-label="Containing areas" hidden></nav>
 <p class="controls" id="areaoutlinestatus" role="status" hidden></p>
 <div id="bringSitesMapHolder"><div id="leftMask"></div><div id="rightMask"></div><div id="map"></div></div>
@@ -718,6 +760,7 @@ const page = `<!doctype html>
 <p id="billionairecounter" hidden></p>
 <p class="share-image"><button type="button" id="copyimage" disabled>Copy image</button> <span id="imagestatus" role="status"></span></p>
 <p id="status" role="status" style="text-align:center">Click on the map to calculate.</p>
+</div>
 <h2>Give me the data!</h2>
 <div id="table"></div>
 <p class="howitworks">How property value works: Each country's total value of land and of buildings comes from its official national balance sheet, or from a simple model based on GDP where none is published. Within each country, land follows population, local density, local income and GDP, and buildings follow population and GDP. <a href="${SOURCE_REPOSITORY}/blob/main/docs/methodology.md">Full methodology</a>.</p>
@@ -1189,10 +1232,20 @@ methodologyNote.onAdd = function () {
   return note;
 };
 methodologyNote.addTo(map);
+// On phones the map takes whatever height is left, which changes when the row of areas
+// appears; tell Leaflet, and keep a circle fully in view.
+new ResizeObserver(function () {
+  map.invalidateSize();
+  if (!pickingArea && !drawingShape && CirclesLayer.getLayers().length && !map.getBounds().contains(CirclesLayer.getBounds())) {
+    map.fitBounds(CirclesLayer.getBounds());
+  }
+}).observe(document.getElementById('map'));
 function drawcircles(latitude, longitude, zoom) {
   CirclesLayer.clearLayers();
   L.circle([latitude, longitude], { radius: 1000 * Number(range.value) }).addTo(CirclesLayer);
-  if (zoom !== undefined) map.setView([latitude, longitude], zoom);
+  // A shared link's zoom, but never closer than shows the whole circle on this screen.
+  // A map with no size yet (a background tab) cannot say what fits, so it keeps the link's zoom.
+  if (zoom !== undefined) map.setView([latitude, longitude], map.getSize().x ? Math.min(zoom, map.getBoundsZoom(CirclesLayer.getBounds())) : zoom);
   else map.fitBounds(CirclesLayer.getBounds());
 }
 async function requestData(latitude, longitude) {
@@ -1458,7 +1511,12 @@ function renderAreaLinks() {
     navigation.appendChild(prefix);
   }
   areaTrail.forEach(function (reference, index) {
-    if (index) navigation.appendChild(document.createTextNode(' › '));
+    if (index) {
+      var separator = document.createElement('span');
+      separator.className = 'area-separator';
+      separator.textContent = ' › ';
+      navigation.appendChild(separator);
+    }
     var link = document.createElement('a');
     link.textContent = areaDisplayName(reference);
     link.href = areaLink(reference.id);
@@ -1473,13 +1531,13 @@ function renderAreaLinks() {
       }
       selectNamedArea(reference);
     });
-    navigation.appendChild(link);
     var levelName = areaLevelName(reference);
     if (levelName) {
       var label = document.createElement('small');
-      label.textContent = ' ' + levelName;
-      navigation.appendChild(label);
+      label.textContent = levelName;
+      link.appendChild(label);
     }
+    navigation.appendChild(link);
   });
 }
 async function selectNamedArea(reference, controller) {
